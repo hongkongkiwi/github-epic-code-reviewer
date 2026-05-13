@@ -35,15 +35,19 @@ jobs:
               const body = (comment.body || "").trim().toLowerCase();
               const trusted = ["OWNER", "MEMBER", "COLLABORATOR"].includes(comment.author_association);
               const command = ["@epic-reviewer"].some((prefix) => body === prefix || body.startsWith(`${prefix} `));
-              if (issue.pull_request && trusted && command) {
-                const pull = await github.rest.pulls.get({
-                  owner: repo.owner,
-                  repo: repo.repo,
-                  pull_number: issue.number,
-                });
-                prNumber = String(issue.number);
-                headRepo = pull.data.head?.repo?.full_name || "";
-                allowed = headRepo === sameRepoName;
+              if (trusted && command) {
+                try {
+                  const pull = await github.rest.pulls.get({
+                    owner: repo.owner,
+                    repo: repo.repo,
+                    pull_number: issue.number,
+                  });
+                  prNumber = String(issue.number);
+                  headRepo = pull.data.head?.repo?.full_name || "";
+                  allowed = headRepo === sameRepoName;
+                } catch (error) {
+                  core.info(`comment did not resolve to a pull request: ${error.message}`);
+                }
               }
             }
 
