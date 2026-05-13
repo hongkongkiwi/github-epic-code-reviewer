@@ -1,0 +1,60 @@
+{
+  "provider": "openai-compatible",
+  "model": "gpt-4.1-mini",
+  "post_mode": "both",
+  "min_confidence": 0.72,
+  "max_inline_comments": 8,
+  "max_files": 60,
+  "max_diff_chars": 120000,
+  "context_lines": 80,
+  "max_context_chars": 60000,
+  "fail_on_block": false,
+  "dry_run": false,
+  "dry_run_path": "reviewer-pr-output.json",
+  "judge_enabled": true,
+  "dedupe_comments": true,
+  "check_run_enabled": true,
+  "include_symbol_context": true,
+  "include_related_files": true,
+  "memory_path": ".github/reviewer-memory.json",
+  "task_memory_path": ".github/reviewer-task-memory.md",
+  "patch_artifact_path": "reviewer-pr-suggested.patch",
+  "review_rule_files": [
+    "REVIEW.md"
+  ],
+  "path_rule_dirs": [
+    ".github/reviewer-rules"
+  ],
+  "specialist_passes": [
+    "bug-regression",
+    "security",
+    "tests",
+    "api-compatibility",
+    "deploy-config"
+  ],
+  "ci_log_paths": [
+    "test-results/reviewer-ci.log",
+    "semgrep-results.json",
+    "codeql-results.txt"
+  ],
+  "scanner_log_paths": [
+    "semgrep-results.json",
+    "codeql-results.txt"
+  ],
+  "ignore_paths": [
+    "pnpm-lock.yaml",
+    "package-lock.json",
+    "yarn.lock",
+    "dist/**",
+    "build/**",
+    "coverage/**",
+    "*.min.js"
+  ],
+  "focus_paths": [],
+  "rules_files": [
+    "AGENTS.md",
+    ".github/reviewer-pr.md",
+    ".github/copilot-instructions.md"
+  ],
+  "rules": "Prefer high-confidence defects over broad advice. Security, auth, payments, data deletion, migrations, and public APIs deserve stricter review."
+}

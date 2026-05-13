@@ -1,0 +1,93 @@
+name: GitHub Reviewer PR
+description: Self-hostable AI pull request reviewer for GitHub Actions.
+author: hongkongkiwi
+
+inputs:
+  provider:
+    description: Model provider: openai-compatible or anthropic.
+    required: false
+    default: openai-compatible
+  model:
+    description: Model name passed to the provider.
+    required: false
+    default: gpt-4.1-mini
+  config-path:
+    description: Optional JSON config path in the checked-out repository.
+    required: false
+    default: reviewer-pr.config.json
+  max-files:
+    description: Maximum changed files to include.
+    required: false
+    default: "60"
+  max-diff-chars:
+    description: Maximum diff characters sent to the model.
+    required: false
+    default: "120000"
+  post-mode:
+    description: comment, review, or both.
+    required: false
+    default: both
+  min-confidence:
+    description: Minimum confidence from 0.0 to 1.0 for inline findings.
+    required: false
+    default: "0.72"
+  fail-on-block:
+    description: Fail the workflow when a block severity finding is returned.
+    required: false
+    default: "false"
+  dry-run:
+    description: Write JSON and job summary without posting comments.
+    required: false
+    default: "false"
+  context-lines:
+    description: Nearby source lines to collect around each changed hunk.
+    required: false
+    default: "80"
+  max-context-chars:
+    description: Maximum extra context characters sent to the model.
+    required: false
+    default: "60000"
+  judge-enabled:
+    description: Run a second model pass that rejects weak findings.
+    required: false
+    default: "true"
+  dedupe-comments:
+    description: Avoid reposting findings already left by this action.
+    required: false
+    default: "true"
+  check-run-enabled:
+    description: Write a neutral check run with severity counts.
+    required: false
+    default: "true"
+  symbol-context:
+    description: Include simple symbol matches from changed files.
+    required: false
+    default: "true"
+  patch-artifact-path:
+    description: Path written by @reviewer fix.
+    required: false
+    default: reviewer-pr-suggested.patch
+
+runs:
+  using: composite
+  steps:
+    - name: Run AI PR reviewer
+      shell: bash
+      env:
+        REVIEWER_PROVIDER: ${{ inputs.provider }}
+        REVIEWER_MODEL: ${{ inputs.model }}
+        REVIEWER_CONFIG_PATH: ${{ inputs.config-path }}
+        REVIEWER_MAX_FILES: ${{ inputs.max-files }}
+        REVIEWER_MAX_DIFF_CHARS: ${{ inputs.max-diff-chars }}
+        REVIEWER_POST_MODE: ${{ inputs.post-mode }}
+        REVIEWER_MIN_CONFIDENCE: ${{ inputs.min-confidence }}
+        REVIEWER_FAIL_ON_BLOCK: ${{ inputs.fail-on-block }}
+        REVIEWER_DRY_RUN: ${{ inputs.dry-run }}
+        REVIEWER_CONTEXT_LINES: ${{ inputs.context-lines }}
+        REVIEWER_MAX_CONTEXT_CHARS: ${{ inputs.max-context-chars }}
+        REVIEWER_JUDGE_ENABLED: ${{ inputs.judge-enabled }}
+        REVIEWER_DEDUPE_COMMENTS: ${{ inputs.dedupe-comments }}
+        REVIEWER_CHECK_RUN_ENABLED: ${{ inputs.check-run-enabled }}
+        REVIEWER_SYMBOL_CONTEXT: ${{ inputs.symbol-context }}
+        REVIEWER_PATCH_ARTIFACT_PATH: ${{ inputs.patch-artifact-path }}
+      run: python3 "$GITHUB_ACTION_PATH/scripts/review_pr.py"

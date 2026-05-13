@@ -1,0 +1,55 @@
+name: AI PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  checks: write
+
+jobs:
+  review:
+    if: |
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.draft == false &&
+       github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       (contains(github.event.comment.body, '@reviewer') ||
+        contains(github.event.comment.body, '/ai-review')))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: refs/pull/${{ github.event.pull_request.number || github.event.issue.number }}/merge
+
+      - name: Review pull request
+        uses: hongkongkiwi/github-reviewer-pr@main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REVIEWER_OPENAI_API_KEY: ${{ secrets.REVIEWER_OPENAI_API_KEY }}
+          # Optional for OpenAI-compatible gateways:
+          # REVIEWER_OPENAI_BASE_URL: ${{ secrets.REVIEWER_OPENAI_BASE_URL }}
+        with:
+          provider: openai-compatible
+          model: gpt-4.1-mini
+          config-path: reviewer-pr.config.json
+          post-mode: both
+          min-confidence: "0.72"
+          judge-enabled: "true"
+          dedupe-comments: "true"
+
+      - name: Upload suggested patch
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reviewer-pr-suggested-patch
+          path: reviewer-pr-suggested.patch
+          if-no-files-found: ignore
