@@ -31,6 +31,7 @@ jobs:
           python3 -m json.tool templates/epic-code-reviewer.config.json >/dev/null
           python3 -m json.tool templates/epic-code-reviewer.schema.json >/dev/null
           python3 -m json.tool templates/epic-code-reviewer-memory.json >/dev/null
+          ruby -e "require 'yaml'; YAML.load_file('action.yml')"
 
       - name: Build release notes
         run: |

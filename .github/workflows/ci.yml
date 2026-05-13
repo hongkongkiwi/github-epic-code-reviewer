@@ -49,6 +49,9 @@ jobs:
           python3 -m json.tool templates/epic-code-reviewer.schema.json >/dev/null
           python3 -m json.tool templates/epic-code-reviewer-memory.json >/dev/null
 
+      - name: Validate action manifest
+        run: ruby -e "require 'yaml'; YAML.load_file('action.yml')"
+
       - name: Check action package shape
         shell: bash
         run: |
