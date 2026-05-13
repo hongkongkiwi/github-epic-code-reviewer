@@ -156,6 +156,8 @@ lefthook run pre-commit
 
 Release tags use `.github/workflows/release.yml`. Push `v1.2.3` and the workflow publishes a GitHub release, then moves the matching major tag such as `v1`.
 
+The first release is `v1.0.0`; production workflows should pin to `@v1`.
+
 ## Notes
 
 This action sends PR diffs to the configured model provider. For private code that must stay on your own network, run it on a self-hosted runner with an OpenAI-compatible local endpoint and set `REVIEWER_OPENAI_BASE_URL`.
