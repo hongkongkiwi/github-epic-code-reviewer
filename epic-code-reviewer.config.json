@@ -10,27 +10,30 @@
   "max_context_chars": 60000,
   "fail_on_block": false,
   "dry_run": false,
-  "dry_run_path": "reviewer-pr-output.json",
+  "dry_run_path": "epic-code-reviewer-output.json",
   "judge_enabled": true,
   "dedupe_comments": true,
   "check_run_enabled": true,
   "include_symbol_context": true,
   "include_related_files": true,
-  "memory_path": ".github/reviewer-memory.json",
-  "task_memory_path": ".github/reviewer-task-memory.md",
-  "patch_artifact_path": "reviewer-pr-suggested.patch",
+  "memory_path": ".github/epic-code-reviewer-memory.json",
+  "task_memory_path": ".github/epic-code-reviewer-task-memory.md",
+  "patch_artifact_path": "epic-code-reviewer-suggested.patch",
   "review_rule_files": [
     "REVIEW.md"
   ],
   "path_rule_dirs": [
-    ".github/reviewer-rules"
+    ".github/epic-code-reviewer-rules"
   ],
   "specialist_passes": [
     "bug-regression",
     "security",
     "tests",
     "api-compatibility",
-    "deploy-config"
+    "deploy-config",
+    "llm-agent",
+    "tool-permissions",
+    "stale-claims"
   ],
   "ci_log_paths": [
     "test-results/reviewer-ci.log",
@@ -53,7 +56,7 @@
   "focus_paths": [],
   "rules_files": [
     "AGENTS.md",
-    ".github/reviewer-pr.md",
+    ".github/epic-code-reviewer.md",
     ".github/copilot-instructions.md"
   ],
   "rules": "Prefer high-confidence defects over broad advice. Security, auth, payments, data deletion, migrations, and public APIs deserve stricter review."

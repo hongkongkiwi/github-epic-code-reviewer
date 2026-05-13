@@ -1,4 +1,4 @@
-name: AI PR Review
+name: GitHub Epic Code Reviewer
 
 on:
   pull_request:
@@ -8,37 +8,81 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
-  issues: write
-  checks: write
 
 jobs:
-  review:
-    if: |
-      (github.event_name == 'pull_request' &&
-       github.event.pull_request.draft == false &&
-       github.event.pull_request.head.repo.full_name == github.repository) ||
-      (github.event_name == 'issue_comment' &&
-       github.event.issue.pull_request &&
-       (contains(github.event.comment.body, '@reviewer') ||
-        contains(github.event.comment.body, '/ai-review')))
+  preflight:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    outputs:
+      allowed: ${{ steps.check.outputs.allowed }}
+      pr_number: ${{ steps.check.outputs.pr_number }}
+    steps:
+      - name: Check PR safety
+        id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const repo = context.repo;
+            const sameRepoName = `${repo.owner}/${repo.repo}`;
+            let allowed = false;
+            let prNumber = "";
+            let headRepo = "";
+
+            if (context.eventName === "pull_request") {
+              const pr = context.payload.pull_request;
+              prNumber = String(pr.number);
+              headRepo = pr.head?.repo?.full_name || "";
+              allowed = pr.draft === false && headRepo === sameRepoName;
+            } else if (context.eventName === "issue_comment") {
+              const issue = context.payload.issue;
+              const comment = context.payload.comment;
+              const body = (comment.body || "").trim().toLowerCase();
+              const trusted = ["OWNER", "MEMBER", "COLLABORATOR"].includes(comment.author_association);
+              const command = ["@epic-reviewer"].some((prefix) => body === prefix || body.startsWith(`${prefix} `));
+              if (issue.pull_request && trusted && command) {
+                const pull = await github.rest.pulls.get({
+                  owner: repo.owner,
+                  repo: repo.repo,
+                  pull_number: issue.number,
+                });
+                prNumber = String(issue.number);
+                headRepo = pull.data.head?.repo?.full_name || "";
+                allowed = headRepo === sameRepoName;
+              }
+            }
+
+            core.info(`head_repo == repo: ${headRepo === sameRepoName}`);
+            core.setOutput("allowed", String(allowed));
+            core.setOutput("pr_number", prNumber);
+
+  review:
+    needs: preflight
+    if: needs.preflight.outputs.allowed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      checks: write
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: refs/pull/${{ github.event.pull_request.number || github.event.issue.number }}/merge
+          ref: refs/pull/${{ needs.preflight.outputs.pr_number }}/merge
 
       - name: Review pull request
-        uses: hongkongkiwi/github-reviewer-pr@main
+        uses: hongkongkiwi/github-epic-code-reviewer@main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REVIEWER_ANTHROPIC_API_KEY: ${{ secrets.REVIEWER_ANTHROPIC_API_KEY }}
         with:
           provider: anthropic
           model: claude-sonnet-4-5-20250929
-          config-path: reviewer-pr.config.json
+          config-path: epic-code-reviewer.config.json
           post-mode: both
           min-confidence: "0.72"
           judge-enabled: "true"
@@ -48,6 +92,14 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: reviewer-pr-suggested-patch
-          path: reviewer-pr-suggested.patch
+          name: epic-code-reviewer-suggested-patch
+          path: epic-code-reviewer-suggested.patch
+          if-no-files-found: ignore
+
+      - name: Upload task memory
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: epic-code-reviewer-task-memory
+          path: .github/epic-code-reviewer-task-memory.md
           if-no-files-found: ignore

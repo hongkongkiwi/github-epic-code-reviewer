@@ -1,4 +1,4 @@
-# Reviewer Rules
+# GitHub Epic Code Reviewer Rules
 
 Report only issues backed by code evidence.
 

@@ -1,5 +1,5 @@
-name: GitHub Reviewer PR
-description: Self-hostable AI pull request reviewer for GitHub Actions.
+name: GitHub Epic Code Reviewer
+description: Self-hostable epic code reviewer for GitHub Actions.
 author: hongkongkiwi
 
 inputs:
@@ -14,7 +14,7 @@ inputs:
   config-path:
     description: Optional JSON config path in the checked-out repository.
     required: false
-    default: reviewer-pr.config.json
+    default: epic-code-reviewer.config.json
   max-files:
     description: Maximum changed files to include.
     required: false
@@ -64,14 +64,14 @@ inputs:
     required: false
     default: "true"
   patch-artifact-path:
-    description: Path written by @reviewer fix.
+    description: Path written by @epic-reviewer fix.
     required: false
-    default: reviewer-pr-suggested.patch
+    default: epic-code-reviewer-suggested.patch
 
 runs:
   using: composite
   steps:
-    - name: Run AI PR reviewer
+    - name: Run GitHub Epic Code Reviewer
       shell: bash
       env:
         REVIEWER_PROVIDER: ${{ inputs.provider }}

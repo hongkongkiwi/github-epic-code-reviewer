@@ -1,0 +1,63 @@
+pre-commit:
+  parallel: true
+  commands:
+    python-compile:
+      glob: "{scripts,tests}/**/*.py"
+      run: python3 -m py_compile scripts/review_pr.py
+
+    unit-tests:
+      glob: "{scripts,tests}/**/*.py"
+      run: python3 -m unittest discover -s tests
+
+    json-config:
+      glob: "*.json"
+      run: |
+        python3 -m json.tool epic-code-reviewer.config.json >/dev/null
+        python3 -m json.tool templates/epic-code-reviewer.config.json >/dev/null
+        python3 -m json.tool templates/epic-code-reviewer-memory.json >/dev/null
+
+    actionlint:
+      glob: "{.github/workflows,templates}/*.yml"
+      run: |
+        if command -v actionlint >/dev/null 2>&1; then
+          actionlint .github/workflows/*.yml templates/ai-pr-review*.yml
+        else
+          echo "actionlint not installed; skipping workflow lint"
+        fi
+
+    stale-names:
+      run: |
+        if git grep -nE 'github-reviewer-pr|reviewer-pr|GitHub Reviewer PR|@reviewer|/ai-review|security-events: read' -- ':!tests/test_review_pr.py' ':!.github/workflows/ci.yml' ':!lefthook.yml'; then
+          exit 1
+        fi
+
+pre-push:
+  commands:
+    full-check:
+      run: |
+        python3 -m unittest discover -s tests
+        python3 -m py_compile scripts/review_pr.py
+        python3 -m json.tool epic-code-reviewer.config.json >/dev/null
+        python3 -m json.tool templates/epic-code-reviewer.config.json >/dev/null
+        python3 -m json.tool templates/epic-code-reviewer-memory.json >/dev/null
+
+        if command -v actionlint >/dev/null 2>&1; then
+          actionlint .github/workflows/*.yml templates/ai-pr-review*.yml
+        fi
+
+        if git grep -nE 'github-reviewer-pr|reviewer-pr|GitHub Reviewer PR|@reviewer|/ai-review|security-events: read' -- ':!tests/test_review_pr.py' ':!.github/workflows/ci.yml' ':!lefthook.yml'; then
+          exit 1
+        fi
+
+        for file in templates/ai-pr-review*.yml; do
+          grep -q 'jobs:' "$file"
+          grep -q 'preflight:' "$file"
+          grep -q "needs.preflight.outputs.allowed == 'true'" "$file"
+          grep -q 'refs/pull/' "$file"
+          grep -q 'needs.preflight.outputs.pr_number' "$file"
+          grep -q '@epic-reviewer' "$file"
+          grep -q 'epic-code-reviewer-task-memory' "$file"
+          if grep -q '@reviewer' "$file"; then exit 1; fi
+          if grep -q '/ai-review' "$file"; then exit 1; fi
+          if grep -q 'security-events: read' "$file"; then exit 1; fi
+        done

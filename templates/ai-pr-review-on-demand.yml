@@ -1,8 +1,6 @@
-name: GitHub Epic Code Reviewer
+name: GitHub Epic Code Reviewer On Demand
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
   issue_comment:
     types: [created]
 
@@ -31,12 +29,7 @@ jobs:
             let prNumber = "";
             let headRepo = "";
 
-            if (context.eventName === "pull_request") {
-              const pr = context.payload.pull_request;
-              prNumber = String(pr.number);
-              headRepo = pr.head?.repo?.full_name || "";
-              allowed = pr.draft === false && headRepo === sameRepoName;
-            } else if (context.eventName === "issue_comment") {
+            if (context.eventName === "issue_comment") {
               const issue = context.payload.issue;
               const comment = context.payload.comment;
               const body = (comment.body || "").trim().toLowerCase();
@@ -61,14 +54,14 @@ jobs:
   review:
     needs: preflight
     if: needs.preflight.outputs.allowed == 'true'
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
       issues: write
       checks: write
     steps:
-      - name: Check out repository
+      - name: Check out pull request
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -78,13 +71,15 @@ jobs:
         uses: hongkongkiwi/github-epic-code-reviewer@main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REVIEWER_OPENAI_BASE_URL: http://127.0.0.1:11434/v1
+          REVIEWER_OPENAI_API_KEY: ${{ secrets.REVIEWER_OPENAI_API_KEY }}
+          # Optional for OpenAI-compatible gateways:
+          # REVIEWER_OPENAI_BASE_URL: ${{ secrets.REVIEWER_OPENAI_BASE_URL }}
         with:
-          provider: ollama
-          model: qwen2.5-coder:32b
+          provider: openai-compatible
+          model: gpt-4.1-mini
           config-path: epic-code-reviewer.config.json
           post-mode: both
-          min-confidence: "0.78"
+          min-confidence: "0.72"
           judge-enabled: "true"
           dedupe-comments: "true"
 

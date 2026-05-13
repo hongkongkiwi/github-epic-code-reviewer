@@ -1,4 +1,4 @@
-# GitHub Reviewer PR
+# GitHub Epic Code Reviewer
 
 A small, self-hostable AI pull request reviewer for GitHub Actions.
 
@@ -6,14 +6,15 @@ It posts a sticky PR summary and inline comments on changed lines. The reviewer 
 
 The action now runs as a review pipeline:
 
-- It reads repo rules from `AGENTS.md` and `.github/reviewer-pr.md`.
+- It reads repo rules from `AGENTS.md` and `.github/epic-code-reviewer.md`.
 - It reads review-only policy from `REVIEW.md`, including nested files under changed paths.
-- It reads path-specific rules from `.github/reviewer-rules/*.instructions.md`.
+- It reads path-specific rules from `.github/epic-code-reviewer-rules/*.instructions.md`.
 - It collects nearby source lines around changed hunks.
 - It adds simple symbol matches, CODEOWNERS, CI logs, and scanner logs to the review context.
 - It adds related test/spec files when their names match changed files.
 - It can read CI and scanner logs before asking the model to review.
 - It runs narrow review passes for bugs, security, tests, API compatibility, and deploy/config risk.
+- It has extra lanes for LLM/agent code, tool permission boundaries, and stale review claims.
 - It runs a judge pass that drops weak findings.
 - It avoids reposting the same inline finding on later pushes.
 - It writes a neutral check run with machine-readable severity counts.
@@ -26,12 +27,12 @@ The action now runs as a review pipeline:
 Copy these files into the target repository:
 
 - `templates/ai-pr-review-with-scanners.yml` to `.github/workflows/ai-pr-review.yml`
-- `templates/reviewer-pr.config.json` to `reviewer-pr.config.json`
+- `templates/epic-code-reviewer.config.json` to `epic-code-reviewer.config.json`
 - `templates/REVIEW.md` to `REVIEW.md`
-- `templates/reviewer-memory.json` to `.github/reviewer-memory.json`
-- `templates/reviewer-task-memory.md` to `.github/reviewer-task-memory.md` if you want a checked-in seed file
-- `templates/reviewer-rules/*.instructions.md` to `.github/reviewer-rules/`
-- optional `.github/reviewer-pr.md` for repo-specific review rules
+- `templates/epic-code-reviewer-memory.json` to `.github/epic-code-reviewer-memory.json`
+- `templates/epic-code-reviewer-task-memory.md` to `.github/epic-code-reviewer-task-memory.md` if you want a checked-in seed file
+- `templates/epic-code-reviewer-rules/*.instructions.md` to `.github/epic-code-reviewer-rules/`
+- optional `.github/epic-code-reviewer.md` for repo-specific review rules
 
 Add one repository secret:
 
@@ -45,6 +46,10 @@ The default workflow skips pull requests from forks. That keeps repository secre
 
 For a lighter setup, use `templates/ai-pr-review.yml`. It skips the test and Semgrep steps.
 
+For token-controlled reviews, use `templates/ai-pr-review-on-demand.yml`. It runs only after a repository owner, member, or collaborator comments with `@epic-reviewer`.
+
+This repository also has `.github/workflows/self-review.yml` for on-demand self-review. It checks the same trust rules and skips the model call if `REVIEWER_OPENAI_API_KEY` is not configured.
+
 ## Anthropic
 
 Use `templates/ai-pr-review-anthropic.yml` and add:
@@ -57,7 +62,7 @@ Use `templates/ai-pr-review-local.yml` on a self-hosted runner with an OpenAI-co
 
 ## Config
 
-`reviewer-pr.config.json` controls noise:
+`epic-code-reviewer.config.json` controls noise:
 
 - `min_confidence`: drops weak findings.
 - `max_inline_comments`: keeps the review short.
@@ -80,20 +85,20 @@ Use `templates/ai-pr-review-local.yml` on a self-hosted runner with an OpenAI-co
 On a pull request, comment:
 
 ```text
-@reviewer retry
+@epic-reviewer retry
 ```
 
-That reruns the review. `/ai-review retry` works too.
+That reruns the review.
 
 Other commands:
 
 ```text
-@reviewer ask why is this risky?
-@reviewer describe
-@reviewer fix
-@reviewer quick
-@reviewer deep
-@reviewer security
+@epic-reviewer ask why is this risky?
+@epic-reviewer describe
+@epic-reviewer fix
+@epic-reviewer quick
+@epic-reviewer deep
+@epic-reviewer security
 ```
 
 `ask` posts an answer as a PR comment. `describe` updates the PR title/body. `fix` writes a suggested patch artifact; it does not push commits.
@@ -130,6 +135,13 @@ The script has no third-party Python dependencies.
 ```bash
 python3 -m py_compile scripts/review_pr.py
 python3 -m unittest discover -s tests
+```
+
+Optional local hooks:
+
+```bash
+lefthook install
+lefthook run pre-commit
 ```
 
 ## Notes

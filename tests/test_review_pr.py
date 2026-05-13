@@ -13,8 +13,11 @@ from scripts.review_pr import (
     build_task_memory_markdown,
     changed_lines_by_file,
     dedupe_findings,
+    escape_markdown_text,
+    escape_table_cell,
     filter_memory_findings,
     filter_findings,
+    format_inline_body,
     format_pr_description,
     load_review_rules,
     parse_json_response,
@@ -180,7 +183,7 @@ class ReviewPrTests(unittest.TestCase):
             service = root / "services" / "payments"
             service.mkdir(parents=True)
             (service / "REVIEW.md").write_text("Payments policy", encoding="utf-8")
-            rules_dir = root / ".github" / "reviewer-rules"
+            rules_dir = root / ".github" / "epic-code-reviewer-rules"
             rules_dir.mkdir(parents=True)
             (rules_dir / "python.instructions.md").write_text(
                 "---\nglobs:\n  - services/**/*.py\n---\nPython policy",
@@ -191,7 +194,7 @@ class ReviewPrTests(unittest.TestCase):
                 root,
                 [{"filename": "services/payments/charge.py"}],
                 ["REVIEW.md"],
-                [".github/reviewer-rules"],
+                [".github/epic-code-reviewer-rules"],
             )
 
             self.assertIn("Root review policy", rules)
@@ -207,7 +210,7 @@ class ReviewPrTests(unittest.TestCase):
             {
                 "path": "src/app.py",
                 "line": 12,
-                "body": "<!-- github-reviewer-pr-finding:src/app.py:12:missing-guard -->\nold",
+                "body": "<!-- github-epic-code-reviewer-finding:src/app.py:12:missing-guard -->\nold",
             }
         ]
 
@@ -215,14 +218,16 @@ class ReviewPrTests(unittest.TestCase):
 
         self.assertEqual([finding["title"] for finding in kept], ["Other issue"])
 
-    def test_parse_review_command_supports_retry_fix_and_explain(self):
-        self.assertEqual(parse_review_command("@reviewer retry"), "retry")
-        self.assertEqual(parse_review_command("/ai-review fix"), "fix")
-        self.assertEqual(parse_review_command("@reviewer ask why risky?"), "ask")
-        self.assertEqual(parse_review_command("@reviewer describe"), "describe")
-        self.assertEqual(parse_review_command("@reviewer security"), "security")
-        self.assertEqual(parse_review_command("@reviewer deep"), "deep")
-        self.assertEqual(parse_review_command("@reviewer quick"), "quick")
+    def test_parse_review_command_supports_epic_reviewer_commands(self):
+        self.assertEqual(parse_review_command("@epic-reviewer retry"), "retry")
+        self.assertEqual(parse_review_command("@epic-reviewer fix"), "fix")
+        self.assertEqual(parse_review_command("@epic-reviewer ask why risky?"), "ask")
+        self.assertEqual(parse_review_command("@epic-reviewer describe"), "describe")
+        self.assertEqual(parse_review_command("@epic-reviewer security"), "security")
+        self.assertEqual(parse_review_command("@epic-reviewer deep"), "deep")
+        self.assertEqual(parse_review_command("@epic-reviewer quick"), "quick")
+        self.assertEqual(parse_review_command("@reviewer retry"), "")
+        self.assertEqual(parse_review_command("/ai-review retry"), "")
         self.assertEqual(parse_review_command("please look"), "")
 
     def test_review_mode_config_changes_passes_and_context_budget(self):
@@ -233,6 +238,9 @@ class ReviewPrTests(unittest.TestCase):
 
         review_mode_config(config, "deep")
         self.assertIn("api-compatibility", config.specialist_passes)
+        self.assertIn("llm-agent", config.specialist_passes)
+        self.assertIn("tool-permissions", config.specialist_passes)
+        self.assertIn("stale-claims", config.specialist_passes)
         self.assertGreaterEqual(config.max_context_chars, 100000)
 
         review_mode_config(config, "quick")
@@ -269,26 +277,33 @@ class ReviewPrTests(unittest.TestCase):
     def test_build_static_system_prompt_contains_cache_boundary(self):
         prompt = build_static_system_prompt()
 
-        self.assertIn("__REVIEWER_DYNAMIC_CONTEXT_BOUNDARY__", prompt)
+        self.assertIn("__EPIC_REVIEWER_DYNAMIC_CONTEXT_BOUNDARY__", prompt)
         self.assertIn("untrusted", prompt.lower())
 
     def test_build_task_memory_markdown_records_verification_and_risk(self):
         memory = build_task_memory_markdown(
-            {"title": "Add auth"},
-            {"tier": "high", "reasons": ["auth path changed"], "safeguards": ["run auth tests"]},
-            {"summary": "Reviewed"},
-            [{"title": "Bug"}],
+            {"title": "Add auth @team"},
+            {
+                "tier": "high",
+                "reasons": ["auth path changed"],
+                "safeguards": ["run auth tests"],
+            },
+            {"summary": "Reviewed <img src=x>"},
+            [{"severity": "warn", "path": "src/app.py", "line": 12, "title": "Bug | @team"}],
         )
 
         self.assertIn("Risk", memory)
         self.assertIn("auth path changed", memory)
         self.assertIn("Bug", memory)
+        self.assertIn("\\@team", memory)
+        self.assertIn("&lt;img", memory)
+        self.assertNotIn("<img", memory)
 
     def test_format_pr_description_uses_model_sections(self):
         body = format_pr_description(
             {
                 "title": "Better auth",
-                "summary": ["Adds token rotation"],
+                "summary": ["Adds token rotation <b>@team</b>"],
                 "risk": ["Touches login"],
                 "test_plan": ["pytest"],
                 "review_notes": ["Check rollout"],
@@ -297,11 +312,13 @@ class ReviewPrTests(unittest.TestCase):
 
         self.assertIn("## Summary", body)
         self.assertIn("- Adds token rotation", body)
+        self.assertIn("&lt;b&gt;\\@team&lt;/b&gt;", body)
+        self.assertNotIn("<b>", body)
         self.assertIn("## Test Plan", body)
 
     def test_build_check_run_output_has_machine_readable_counts(self):
         output = build_check_run_output(
-            {"summary": "Review done", "risk_level": "high"},
+            {"summary": "Review done <script>@team</script>", "risk_level": "high"},
             [
                 {"severity": "block", "path": "src/app.py", "line": 12, "title": "Bug"},
                 {"severity": "note", "path": "src/app.py", "line": 20, "title": "Nit"},
@@ -309,8 +326,43 @@ class ReviewPrTests(unittest.TestCase):
         )
 
         self.assertIn("src/app.py:12", output["text"])
-        self.assertIn("reviewer-pr-severity:", output["text"])
+        self.assertIn("epic-code-reviewer-severity:", output["text"])
+        self.assertIn("&lt;script&gt;\\@team&lt;/script&gt;", output["text"])
+        self.assertNotIn("<script>", output["text"])
         self.assertEqual(output["summary"], "Risk: high. Findings: 2.")
+
+    def test_markdown_output_escapes_model_controlled_text(self):
+        comment = format_inline_body(
+            {
+                "path": "src/app.py",
+                "line": 12,
+                "severity": "warn",
+                "confidence": 0.9,
+                "title": "<script>@team</script>",
+                "body": "<img src=x onerror=alert(1)>",
+            }
+        )
+
+        self.assertIn("&lt;script&gt;", comment)
+        self.assertNotIn("<script>", comment)
+        self.assertNotIn("<img", comment)
+        self.assertIn("\\@team", comment)
+
+    def test_escape_table_cell_keeps_markdown_table_shape(self):
+        self.assertEqual(escape_table_cell("bad | cell\nnext"), "bad \\| cell next")
+
+    def test_templates_gate_review_job_on_preflight(self):
+        for path in Path("templates").glob("ai-pr-review*.yml"):
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("jobs:\n  preflight:", text)
+            self.assertIn("needs: preflight", text)
+            self.assertIn("needs.preflight.outputs.allowed == 'true'", text)
+            self.assertIn("head_repo == repo", text)
+            self.assertIn("epic-code-reviewer-task-memory", text)
+            self.assertIn("@epic-reviewer", text)
+            self.assertNotIn("@reviewer", text)
+            self.assertNotIn("/ai-review", text)
+            self.assertNotIn("security-events: read", text)
 
     def test_filter_memory_findings_drops_dismissed_fingerprint(self):
         findings = [{"path": "src/app.py", "line": 12, "title": "Missing guard"}]
@@ -334,14 +386,18 @@ class ReviewPrTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "review.json"
             summary = Path(tmp) / "summary.md"
-            result = {"summary": "Looks okay.", "risk_level": "low"}
+            result = {"summary": "Looks okay. <img src=x> @team", "risk_level": "low"}
             findings = [{"path": "src/app.py", "line": 12, "title": "Issue"}]
 
             write_dry_run_output(output, summary, result, findings)
 
             data = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(data["findings"][0]["title"], "Issue")
-            self.assertIn("Looks okay.", summary.read_text(encoding="utf-8"))
+            summary_text = summary.read_text(encoding="utf-8")
+            self.assertIn("Looks okay.", summary_text)
+            self.assertIn("&lt;img", summary_text)
+            self.assertIn("\\@team", summary_text)
+            self.assertNotIn("<img", summary_text)
 
 
 if __name__ == "__main__":

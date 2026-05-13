@@ -4,19 +4,85 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  python:
+  test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
 
       - name: Compile reviewer script
         run: python3 -m py_compile scripts/review_pr.py
 
       - name: Run tests
         run: python3 -m unittest discover -s tests
+
+  package-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate JSON config files
+        run: |
+          python3 -m json.tool epic-code-reviewer.config.json >/dev/null
+          python3 -m json.tool templates/epic-code-reviewer.config.json >/dev/null
+          python3 -m json.tool templates/epic-code-reviewer-memory.json >/dev/null
+
+      - name: Check action package shape
+        shell: bash
+        run: |
+          test -f action.yml
+          test -f scripts/review_pr.py
+          test -f .github/epic-code-reviewer.md
+          test -f templates/ai-pr-review.yml
+          test -f templates/ai-pr-review-with-scanners.yml
+          test -f templates/ai-pr-review-anthropic.yml
+          test -f templates/ai-pr-review-local.yml
+          test -f templates/ai-pr-review-on-demand.yml
+          test -f templates/epic-code-reviewer.config.json
+          test -f templates/epic-code-reviewer-memory.json
+          test -f templates/epic-code-reviewer-task-memory.md
+          test -f templates/epic-code-reviewer-rules/python.instructions.md
+          test -f templates/epic-code-reviewer-rules/typescript.instructions.md
+
+      - name: Check renamed public surface
+        shell: bash
+        run: |
+          if git grep -nE 'github-reviewer-pr|reviewer-pr|GitHub Reviewer PR|@reviewer|/ai-review|security-events: read' -- ':!tests/test_review_pr.py' ':!.github/workflows/ci.yml' ':!lefthook.yml'; then
+            exit 1
+          fi
+
+      - name: Check workflow templates
+        shell: bash
+        run: |
+          for file in templates/ai-pr-review*.yml; do
+            grep -q 'jobs:' "$file"
+            grep -q 'preflight:' "$file"
+            grep -q "needs.preflight.outputs.allowed == 'true'" "$file"
+            grep -q 'refs/pull/' "$file"
+            grep -q 'needs.preflight.outputs.pr_number' "$file"
+            grep -q '@epic-reviewer' "$file"
+            grep -q 'epic-code-reviewer-task-memory' "$file"
+            if grep -q '@reviewer' "$file"; then exit 1; fi
+            if grep -q '/ai-review' "$file"; then exit 1; fi
+            if grep -q 'security-events: read' "$file"; then exit 1; fi
+          done
