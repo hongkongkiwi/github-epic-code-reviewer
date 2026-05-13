@@ -10,7 +10,7 @@
     },
     "provider": {
       "type": "string",
-      "enum": ["openai", "openai-compatible", "ollama", "anthropic"]
+      "enum": ["openai", "openai-compatible", "openrouter", "ollama", "anthropic"]
     },
     "model": {
       "type": "string",

@@ -35,7 +35,7 @@ the summary instead of posting an inline comment.
 
 @dataclass
 class Config:
-    provider: str = "openai-compatible"
+    provider: str = "openai"
     model: str = "gpt-4.1-mini"
     post_mode: str = "both"
     max_files: int = 60
@@ -199,7 +199,7 @@ def load_config() -> Config:
         tier_passes = Config().risk_tier_passes
 
     return Config(
-        provider=str(raw.get("provider") or env("REVIEWER_PROVIDER", "openai-compatible")),
+        provider=str(raw.get("provider") or env("REVIEWER_PROVIDER", "openai")),
         model=str(raw.get("model") or env("REVIEWER_MODEL", "gpt-4.1-mini")),
         post_mode=str(raw.get("post_mode") or env("REVIEWER_POST_MODE", "both")),
         max_files=int(raw.get("max_files") or env("REVIEWER_MAX_FILES", "60")),
@@ -983,32 +983,83 @@ def format_pr_description(description: dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
+def call_openai_chat_completions(
+    prompt: str,
+    model: str,
+    base_url: str,
+    api_key: str = "",
+    extra_headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    if extra_headers:
+        headers.update({key: value for key, value in extra_headers.items() if value})
+    response = provider_request(
+        f"{base_url.rstrip('/')}/chat/completions",
+        headers,
+        {
+            "model": model,
+            "temperature": 0.1,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a strict pull request reviewer. Return valid JSON only.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+        },
+    )
+    content = response["choices"][0]["message"]["content"]
+    return parse_json_response(content)
+
+
 def call_model_provider(prompt: str, provider: str, model: str) -> dict[str, Any]:
     provider = provider.lower()
-    if provider in {"openai", "openai-compatible", "ollama"}:
+    if provider == "openai":
         api_key = env("REVIEWER_OPENAI_API_KEY") or env("OPENAI_API_KEY")
-        base_url = env("REVIEWER_OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+        if not api_key:
+            raise RuntimeError("set REVIEWER_OPENAI_API_KEY or OPENAI_API_KEY")
+        base_url = env("REVIEWER_OPENAI_BASE_URL", "https://api.openai.com/v1")
+        return call_openai_chat_completions(prompt, model, base_url, api_key)
+
+    if provider in {"openai-compatible", "ollama"}:
+        api_key = env("REVIEWER_OPENAI_API_KEY") or env("OPENAI_API_KEY")
+        base_url = env("REVIEWER_OPENAI_BASE_URL", "https://api.openai.com/v1")
         if provider != "ollama" and not api_key:
             raise RuntimeError("set REVIEWER_OPENAI_API_KEY or OPENAI_API_KEY")
-        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-        response = provider_request(
-            f"{base_url}/chat/completions",
-            headers,
-            {
-                "model": model,
-                "temperature": 0.1,
-                "response_format": {"type": "json_object"},
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": "You are a strict pull request reviewer. Return valid JSON only.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-            },
-        )
-        content = response["choices"][0]["message"]["content"]
-        return parse_json_response(content)
+        return call_openai_chat_completions(prompt, model, base_url, api_key)
+
+    if provider == "openrouter":
+        api_key = env("REVIEWER_OPENROUTER_API_KEY") or env("OPENROUTER_API_KEY")
+        if not api_key:
+            raise RuntimeError("set REVIEWER_OPENROUTER_API_KEY or OPENROUTER_API_KEY")
+        headers = {
+            "HTTP-Referer": env("REVIEWER_OPENROUTER_SITE_URL") or env("OPENROUTER_SITE_URL"),
+            "X-Title": env("REVIEWER_OPENROUTER_APP_NAME", "GitHub Epic Code Reviewer"),
+        }
+        base_url = env("REVIEWER_OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+        try:
+            return call_openai_chat_completions(prompt, model, base_url, api_key, headers)
+        except RuntimeError as exc:
+            if "response_format" not in str(exc):
+                raise
+            response = provider_request(
+                f"{base_url.rstrip('/')}/chat/completions",
+                {"Authorization": f"Bearer {api_key}", **{key: value for key, value in headers.items() if value}},
+                {
+                    "model": model,
+                    "temperature": 0.1,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "You are a strict pull request reviewer. Return valid JSON only.",
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                },
+            )
+            content = response["choices"][0]["message"]["content"]
+            return parse_json_response(content)
 
     if provider == "anthropic":
         api_key = env("REVIEWER_ANTHROPIC_API_KEY") or env("ANTHROPIC_API_KEY")

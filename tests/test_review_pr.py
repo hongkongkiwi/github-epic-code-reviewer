@@ -556,6 +556,51 @@ class ReviewPrTests(unittest.TestCase):
         self.assertEqual(result["summary"], "ok")
         self.assertEqual(calls, [("openai-compatible", "primary"), ("anthropic", "fallback")])
 
+    def test_openrouter_uses_openrouter_secret_and_headers(self):
+        calls: list[tuple[str, dict[str, str], dict[str, object]]] = []
+
+        def fake_provider_request(url: str, headers: dict[str, str], body: dict[str, object]) -> dict[str, object]:
+            calls.append((url, headers, body))
+            return {"choices": [{"message": {"content": '{"summary":"ok","findings":[]}'}}]}
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "REVIEWER_OPENROUTER_API_KEY": "or-key",
+                "REVIEWER_OPENROUTER_SITE_URL": "https://github.com/hongkongkiwi/github-epic-code-reviewer",
+                "REVIEWER_OPENROUTER_APP_NAME": "Reviewer Tests",
+            },
+            clear=True,
+        ):
+            with mock.patch.object(review_pr, "provider_request", side_effect=fake_provider_request):
+                result = review_pr.call_model_provider("prompt", "openrouter", "anthropic/claude-sonnet-4.5")
+
+        self.assertEqual(result["summary"], "ok")
+        url, headers, body = calls[0]
+        self.assertEqual(url, "https://openrouter.ai/api/v1/chat/completions")
+        self.assertEqual(headers["Authorization"], "Bearer or-key")
+        self.assertEqual(headers["HTTP-Referer"], "https://github.com/hongkongkiwi/github-epic-code-reviewer")
+        self.assertEqual(headers["X-Title"], "Reviewer Tests")
+        self.assertEqual(body["model"], "anthropic/claude-sonnet-4.5")
+        self.assertEqual(body["response_format"], {"type": "json_object"})
+
+    def test_openai_uses_direct_openai_default_url(self):
+        calls: list[tuple[str, dict[str, str], dict[str, object]]] = []
+
+        def fake_provider_request(url: str, headers: dict[str, str], body: dict[str, object]) -> dict[str, object]:
+            calls.append((url, headers, body))
+            return {"choices": [{"message": {"content": '{"summary":"ok","findings":[]}'}}]}
+
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "openai-key"}, clear=True):
+            with mock.patch.object(review_pr, "provider_request", side_effect=fake_provider_request):
+                result = review_pr.call_model_provider("prompt", "openai", "gpt-4.1-mini")
+
+        self.assertEqual(result["summary"], "ok")
+        url, headers, body = calls[0]
+        self.assertEqual(url, "https://api.openai.com/v1/chat/completions")
+        self.assertEqual(headers["Authorization"], "Bearer openai-key")
+        self.assertEqual(body["model"], "gpt-4.1-mini")
+
     def test_main_issue_comment_ask_posts_answer_and_audit(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

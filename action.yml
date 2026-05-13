@@ -4,9 +4,9 @@ author: hongkongkiwi
 
 inputs:
   provider:
-    description: "Model provider: openai-compatible or anthropic."
+    description: "Model provider: openai, openai-compatible, openrouter, anthropic, or ollama."
     required: false
-    default: openai-compatible
+    default: openai
   model:
     description: Model name passed to the provider.
     required: false

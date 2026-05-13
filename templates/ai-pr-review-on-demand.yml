@@ -76,10 +76,14 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REVIEWER_OPENAI_API_KEY: ${{ secrets.REVIEWER_OPENAI_API_KEY }}
-          # Optional for OpenAI-compatible gateways:
+          REVIEWER_OPENROUTER_API_KEY: ${{ secrets.REVIEWER_OPENROUTER_API_KEY }}
+          REVIEWER_ANTHROPIC_API_KEY: ${{ secrets.REVIEWER_ANTHROPIC_API_KEY }}
+          # Optional for OpenAI-compatible gateways or OpenRouter metadata:
           # REVIEWER_OPENAI_BASE_URL: ${{ secrets.REVIEWER_OPENAI_BASE_URL }}
+          # REVIEWER_OPENROUTER_SITE_URL: ${{ vars.REVIEWER_OPENROUTER_SITE_URL }}
+          # REVIEWER_OPENROUTER_APP_NAME: GitHub Epic Code Reviewer
         with:
-          provider: openai-compatible
+          provider: openai
           model: gpt-4.1-mini
           config-path: epic-code-reviewer.config.json
           post-mode: both

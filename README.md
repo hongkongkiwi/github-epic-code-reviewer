@@ -35,13 +35,41 @@ Copy these files into the target repository:
 - `templates/epic-code-reviewer-rules/*.instructions.md` to `.github/epic-code-reviewer-rules/`
 - optional `.github/epic-code-reviewer.md` for repo-specific review rules
 
-Add one repository secret:
+For OpenAI, add one repository secret:
 
 - `REVIEWER_OPENAI_API_KEY`
+
+Use this action input:
+
+```yaml
+with:
+  provider: openai
+  model: gpt-4.1-mini
+```
 
 For OpenAI-compatible gateways, also add:
 
 - `REVIEWER_OPENAI_BASE_URL`
+
+Use `provider: openai-compatible`. For Ollama or another local endpoint, use `templates/ai-pr-review-local.yml`.
+
+For OpenRouter, add:
+
+- `REVIEWER_OPENROUTER_API_KEY`
+
+Use this action input:
+
+```yaml
+with:
+  provider: openrouter
+  model: anthropic/claude-sonnet-4.5
+```
+
+Optional OpenRouter metadata:
+
+- `REVIEWER_OPENROUTER_SITE_URL`
+- `REVIEWER_OPENROUTER_APP_NAME`
+- `REVIEWER_OPENROUTER_BASE_URL`
 
 The default workflow skips pull requests from forks. That keeps repository secrets away from outside code. If you need fork support, run this on a locked-down self-hosted runner and review the permissions first.
 
@@ -51,13 +79,17 @@ For token-controlled reviews, use `templates/ai-pr-review-on-demand.yml`. It run
 
 For production pinning after the first release, use `templates/ai-pr-review-pinned.yml`. It points at `hongkongkiwi/github-epic-code-reviewer@v1` instead of `@main`.
 
-This repository also has `.github/workflows/self-review.yml` for on-demand self-review. It checks the same trust rules and skips the model call if `REVIEWER_OPENAI_API_KEY` is not configured.
+This repository also has `.github/workflows/self-review.yml` for on-demand self-review. It checks the same trust rules and skips the model call when the selected provider has no matching secret. Set repo variables `REVIEWER_PROVIDER` and `REVIEWER_MODEL` to dogfood OpenRouter or Anthropic.
+
+If you want OpenRouter as the default, start with `templates/ai-pr-review-openrouter.yml`.
 
 ## Anthropic
 
 Use `templates/ai-pr-review-anthropic.yml` and add:
 
 - `REVIEWER_ANTHROPIC_API_KEY`
+
+Use `provider: anthropic` for Anthropic's Messages API, or `provider: openrouter` for Anthropic models routed through OpenRouter.
 
 ## Local Models
 
