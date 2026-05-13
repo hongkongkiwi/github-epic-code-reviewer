@@ -13,7 +13,9 @@ pre-commit:
       glob: "*.json"
       run: |
         python3 -m json.tool epic-code-reviewer.config.json >/dev/null
+        python3 -m json.tool epic-code-reviewer.schema.json >/dev/null
         python3 -m json.tool templates/epic-code-reviewer.config.json >/dev/null
+        python3 -m json.tool templates/epic-code-reviewer.schema.json >/dev/null
         python3 -m json.tool templates/epic-code-reviewer-memory.json >/dev/null
 
     actionlint:
@@ -38,7 +40,9 @@ pre-push:
         python3 -m unittest discover -s tests
         python3 -m py_compile scripts/review_pr.py
         python3 -m json.tool epic-code-reviewer.config.json >/dev/null
+        python3 -m json.tool epic-code-reviewer.schema.json >/dev/null
         python3 -m json.tool templates/epic-code-reviewer.config.json >/dev/null
+        python3 -m json.tool templates/epic-code-reviewer.schema.json >/dev/null
         python3 -m json.tool templates/epic-code-reviewer-memory.json >/dev/null
 
         if command -v actionlint >/dev/null 2>&1; then

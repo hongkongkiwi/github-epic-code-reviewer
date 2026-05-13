@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate package
+        run: |
+          python3 -m py_compile scripts/review_pr.py
+          python3 -m unittest discover -s tests
+          python3 -m json.tool epic-code-reviewer.config.json >/dev/null
+          python3 -m json.tool epic-code-reviewer.schema.json >/dev/null
+          python3 -m json.tool templates/epic-code-reviewer.config.json >/dev/null
+          python3 -m json.tool templates/epic-code-reviewer.schema.json >/dev/null
+          python3 -m json.tool templates/epic-code-reviewer-memory.json >/dev/null
+
+      - name: Build release notes
+        run: |
+          {
+            echo "## GitHub Epic Code Reviewer ${GITHUB_REF_NAME}"
+            echo
+            echo "- Composite GitHub Action package."
+            echo "- Copyable workflow templates and config schema."
+            echo "- Standard validation passed in the release workflow."
+          } > release-notes.md
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release-notes.md
+          files: |
+            action.yml
+            epic-code-reviewer.config.json
+            epic-code-reviewer.schema.json
+
+      - name: Move major tag
+        if: startsWith(github.ref_name, 'v') && contains(github.ref_name, '.')
+        shell: bash
+        run: |
+          major="${GITHUB_REF_NAME%%.*}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f "$major" "$GITHUB_SHA"
+          git push -f origin "refs/tags/$major"

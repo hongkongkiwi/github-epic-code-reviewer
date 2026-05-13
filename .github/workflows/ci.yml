@@ -44,7 +44,9 @@ jobs:
       - name: Validate JSON config files
         run: |
           python3 -m json.tool epic-code-reviewer.config.json >/dev/null
+          python3 -m json.tool epic-code-reviewer.schema.json >/dev/null
           python3 -m json.tool templates/epic-code-reviewer.config.json >/dev/null
+          python3 -m json.tool templates/epic-code-reviewer.schema.json >/dev/null
           python3 -m json.tool templates/epic-code-reviewer-memory.json >/dev/null
 
       - name: Check action package shape
@@ -58,7 +60,9 @@ jobs:
           test -f templates/ai-pr-review-anthropic.yml
           test -f templates/ai-pr-review-local.yml
           test -f templates/ai-pr-review-on-demand.yml
+          test -f templates/ai-pr-review-pinned.yml
           test -f templates/epic-code-reviewer.config.json
+          test -f templates/epic-code-reviewer.schema.json
           test -f templates/epic-code-reviewer-memory.json
           test -f templates/epic-code-reviewer-task-memory.md
           test -f templates/epic-code-reviewer-rules/python.instructions.md

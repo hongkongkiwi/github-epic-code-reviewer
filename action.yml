@@ -11,6 +11,14 @@ inputs:
     description: Model name passed to the provider.
     required: false
     default: gpt-4.1-mini
+  fallback-provider:
+    description: Optional fallback provider when the primary model request fails.
+    required: false
+    default: ""
+  fallback-model:
+    description: Optional fallback model name.
+    required: false
+    default: ""
   config-path:
     description: Optional JSON config path in the checked-out repository.
     required: false
@@ -67,6 +75,10 @@ inputs:
     description: Path written by @epic-reviewer fix.
     required: false
     default: epic-code-reviewer-suggested.patch
+  auto-review-enabled:
+    description: Review pull_request events automatically. Comment commands still work when false.
+    required: false
+    default: "true"
 
 runs:
   using: composite
@@ -76,6 +88,8 @@ runs:
       env:
         REVIEWER_PROVIDER: ${{ inputs.provider }}
         REVIEWER_MODEL: ${{ inputs.model }}
+        REVIEWER_FALLBACK_PROVIDER: ${{ inputs.fallback-provider }}
+        REVIEWER_FALLBACK_MODEL: ${{ inputs.fallback-model }}
         REVIEWER_CONFIG_PATH: ${{ inputs.config-path }}
         REVIEWER_MAX_FILES: ${{ inputs.max-files }}
         REVIEWER_MAX_DIFF_CHARS: ${{ inputs.max-diff-chars }}
@@ -90,4 +104,5 @@ runs:
         REVIEWER_CHECK_RUN_ENABLED: ${{ inputs.check-run-enabled }}
         REVIEWER_SYMBOL_CONTEXT: ${{ inputs.symbol-context }}
         REVIEWER_PATCH_ARTIFACT_PATH: ${{ inputs.patch-artifact-path }}
+        REVIEWER_AUTO_REVIEW_ENABLED: ${{ inputs.auto-review-enabled }}
       run: python3 "$GITHUB_ACTION_PATH/scripts/review_pr.py"

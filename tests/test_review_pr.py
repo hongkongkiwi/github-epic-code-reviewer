@@ -1,10 +1,14 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+import scripts.review_pr as review_pr
 from scripts.review_pr import (
     Config,
+    apply_review_cost_controls,
     assess_pr_risk,
     build_ask_prompt,
     build_check_run_output,
@@ -21,10 +25,13 @@ from scripts.review_pr import (
     format_pr_description,
     load_review_rules,
     parse_json_response,
+    parse_sarif_results,
+    parse_semgrep_results,
     parse_review_command,
     related_file_context,
     review_mode_config,
     should_trust_comment_command,
+    write_command_audit,
     write_dry_run_output,
     write_patch_artifact,
 )
@@ -136,6 +143,81 @@ class ReviewPrTests(unittest.TestCase):
             self.assertIn("line 4", context)
             self.assertIn("pytest failed", context)
 
+    def test_build_context_pack_summarizes_sarif_before_raw_logs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sarif = root / "codeql.sarif"
+            sarif.write_text(
+                json.dumps(
+                    {
+                        "runs": [
+                            {
+                                "results": [
+                                    {
+                                        "ruleId": "py/test",
+                                        "level": "error",
+                                        "message": {"text": "Unsafe value flows to shell"},
+                                        "locations": [
+                                            {
+                                                "physicalLocation": {
+                                                    "artifactLocation": {"uri": "src/app.py"},
+                                                    "region": {"startLine": 12},
+                                                }
+                                            }
+                                        ],
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            context = build_context_pack(root, [], Config(scanner_log_paths=["codeql.sarif"]))
+
+            self.assertIn("Scanner findings from codeql.sarif", context)
+            self.assertIn("src/app.py:12 [error] py/test", context)
+
+    def test_parse_scanner_formats(self):
+        sarif_lines = parse_sarif_results(
+            {
+                "runs": [
+                    {
+                        "results": [
+                            {
+                                "ruleId": "rule",
+                                "message": {"text": "Message"},
+                                "locations": [
+                                    {
+                                        "physicalLocation": {
+                                            "artifactLocation": {"uri": "a.py"},
+                                            "region": {"startLine": 3},
+                                        }
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                ]
+            }
+        )
+        semgrep_lines = parse_semgrep_results(
+            {
+                "results": [
+                    {
+                        "check_id": "python.lang",
+                        "path": "b.py",
+                        "start": {"line": 9},
+                        "extra": {"message": "Bad call", "severity": "ERROR"},
+                    }
+                ]
+            }
+        )
+
+        self.assertIn("a.py:3", sarif_lines[0])
+        self.assertIn("b.py:9 [ERROR] python.lang", semgrep_lines[0])
+
     def test_build_context_pack_adds_symbol_matches_and_codeowners(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -246,6 +328,23 @@ class ReviewPrTests(unittest.TestCase):
         review_mode_config(config, "quick")
         self.assertEqual(config.specialist_passes, ["bug-regression"])
 
+    def test_apply_review_cost_controls_uses_risk_tiers(self):
+        config = Config()
+
+        apply_review_cost_controls(config, {"tier": "low"}, "review")
+
+        self.assertEqual(config.specialist_passes, ["bug-regression"])
+        self.assertFalse(config.judge_enabled)
+
+    def test_apply_review_cost_controls_keeps_explicit_deep_mode(self):
+        config = Config()
+        review_mode_config(config, "deep")
+        before = list(config.specialist_passes)
+
+        apply_review_cost_controls(config, {"tier": "low"}, "deep")
+
+        self.assertEqual(config.specialist_passes, before)
+
     def test_should_trust_comment_command_requires_collaborator_role(self):
         self.assertTrue(should_trust_comment_command({"author_association": "MEMBER"}))
         self.assertTrue(should_trust_comment_command({"author_association": "OWNER"}))
@@ -279,6 +378,13 @@ class ReviewPrTests(unittest.TestCase):
 
         self.assertIn("__EPIC_REVIEWER_DYNAMIC_CONTEXT_BOUNDARY__", prompt)
         self.assertIn("untrusted", prompt.lower())
+
+    def test_static_prompt_snapshot_guards_review_contract(self):
+        prompt = build_static_system_prompt()
+
+        self.assertIn("Every finding needs evidence, a changed line, a failure mode, and a small fix.", prompt)
+        self.assertIn("tool permission boundaries", prompt)
+        self.assertIn("__EPIC_REVIEWER_DYNAMIC_CONTEXT_BOUNDARY__", prompt)
 
     def test_build_task_memory_markdown_records_verification_and_risk(self):
         memory = build_task_memory_markdown(
@@ -364,6 +470,14 @@ class ReviewPrTests(unittest.TestCase):
             self.assertNotIn("/ai-review", text)
             self.assertNotIn("security-events: read", text)
 
+    def test_schema_covers_config_keys(self):
+        schema = json.loads(Path("epic-code-reviewer.schema.json").read_text(encoding="utf-8"))
+        config = json.loads(Path("epic-code-reviewer.config.json").read_text(encoding="utf-8"))
+
+        missing = set(config) - set(schema["properties"])
+
+        self.assertEqual(missing, set())
+
     def test_filter_memory_findings_drops_dismissed_fingerprint(self):
         findings = [{"path": "src/app.py", "line": 12, "title": "Missing guard"}]
         memory = {"dismissed": [{"fingerprint": "src/app.py:12:missing-guard"}]}
@@ -398,6 +512,106 @@ class ReviewPrTests(unittest.TestCase):
             self.assertIn("&lt;img", summary_text)
             self.assertIn("\\@team", summary_text)
             self.assertNotIn("<img", summary_text)
+
+    def test_write_command_audit_records_trusted_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            write_command_audit(
+                root,
+                ".github/audit.jsonl",
+                {
+                    "comment": {
+                        "author_association": "OWNER",
+                        "user": {"login": "andy"},
+                    }
+                },
+                {"number": 7, "head": {"sha": "abc"}},
+                "ask",
+            )
+
+            record = json.loads((root / ".github" / "audit.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(record["actor"], "andy")
+            self.assertEqual(record["command"], "ask")
+            self.assertEqual(record["pull_number"], 7)
+
+    def test_call_model_tries_fallback_provider(self):
+        config = Config(
+            provider="openai-compatible",
+            model="primary",
+            fallback_provider="anthropic",
+            fallback_model="fallback",
+        )
+        calls: list[tuple[str, str]] = []
+
+        def fake_call(prompt: str, provider: str, model: str) -> dict[str, object]:
+            calls.append((provider, model))
+            if provider == "openai-compatible":
+                raise RuntimeError("primary down")
+            return {"summary": "ok", "findings": []}
+
+        with mock.patch.object(review_pr, "call_model_provider", side_effect=fake_call):
+            result = review_pr.call_model("prompt", config)
+
+        self.assertEqual(result["summary"], "ok")
+        self.assertEqual(calls, [("openai-compatible", "primary"), ("anthropic", "fallback")])
+
+    def test_main_issue_comment_ask_posts_answer_and_audit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            event_path = root / "event.json"
+            event_path.write_text(
+                json.dumps(
+                    {
+                        "issue": {"number": 7, "pull_request": {"url": "https://api.github.com/pulls/7"}},
+                        "comment": {
+                            "body": "@epic-reviewer ask what changed?",
+                            "author_association": "OWNER",
+                            "user": {"login": "andy"},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            requests: list[tuple[str, str, object]] = []
+
+            def fake_github(method: str, path: str, token: str, body: object = None, accept: str = ""):
+                requests.append((method, path, body))
+                if method == "GET" and path == "/repos/o/r/pulls/7":
+                    return {"number": 7, "title": "PR", "head": {"sha": "abc"}}
+                if method == "GET" and path.startswith("/repos/o/r/pulls/7/files"):
+                    return [
+                        {
+                            "filename": "src/app.py",
+                            "status": "modified",
+                            "additions": 1,
+                            "deletions": 0,
+                            "patch": "@@ -1,1 +1,1 @@\n-old\n+new",
+                        }
+                    ]
+                return None
+
+            env = {
+                "GITHUB_TOKEN": "token",
+                "GITHUB_REPOSITORY": "o/r",
+                "GITHUB_EVENT_PATH": str(event_path),
+                "GITHUB_EVENT_NAME": "issue_comment",
+            }
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(
+                    review_pr, "github_request", side_effect=fake_github
+                ), mock.patch.object(review_pr, "call_model", return_value={"answer": "It changes app.py"}):
+                    review_pr.main()
+            finally:
+                os.chdir(old_cwd)
+
+            posted = [item for item in requests if item[0] == "POST"]
+            self.assertEqual(len(posted), 1)
+            self.assertIn("It changes app.py", posted[0][2]["body"])
+            audit = root / ".github" / "epic-code-reviewer-command-audit.jsonl"
+            self.assertIn('"command": "ask"', audit.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

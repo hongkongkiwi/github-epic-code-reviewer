@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hongkongkiwi/github-epic-code-reviewer/epic-code-reviewer.schema.json",
+  "title": "GitHub Epic Code Reviewer config",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "provider": {
+      "type": "string",
+      "enum": ["openai", "openai-compatible", "ollama", "anthropic"]
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "fallback_provider": {
+      "type": "string"
+    },
+    "fallback_model": {
+      "type": "string"
+    },
+    "post_mode": {
+      "type": "string",
+      "enum": ["comment", "review", "both"]
+    },
+    "min_confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "max_inline_comments": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "max_files": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "max_diff_chars": {
+      "type": "integer",
+      "minimum": 1000
+    },
+    "context_lines": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "max_context_chars": {
+      "type": "integer",
+      "minimum": 1000
+    },
+    "fail_on_block": {
+      "type": "boolean"
+    },
+    "dry_run": {
+      "type": "boolean"
+    },
+    "dry_run_path": {
+      "type": "string"
+    },
+    "judge_enabled": {
+      "type": "boolean"
+    },
+    "dedupe_comments": {
+      "type": "boolean"
+    },
+    "check_run_enabled": {
+      "type": "boolean"
+    },
+    "include_symbol_context": {
+      "type": "boolean"
+    },
+    "include_related_files": {
+      "type": "boolean"
+    },
+    "auto_review_enabled": {
+      "type": "boolean"
+    },
+    "skip_judge_on_low_risk": {
+      "type": "boolean"
+    },
+    "memory_path": {
+      "type": "string"
+    },
+    "task_memory_path": {
+      "type": "string"
+    },
+    "audit_log_path": {
+      "type": "string"
+    },
+    "patch_artifact_path": {
+      "type": "string"
+    },
+    "review_rule_files": {
+      "$ref": "#/$defs/stringList"
+    },
+    "path_rule_dirs": {
+      "$ref": "#/$defs/stringList"
+    },
+    "specialist_passes": {
+      "$ref": "#/$defs/stringList"
+    },
+    "risk_tier_passes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "low": {
+          "$ref": "#/$defs/stringList"
+        },
+        "medium": {
+          "$ref": "#/$defs/stringList"
+        },
+        "high": {
+          "$ref": "#/$defs/stringList"
+        }
+      }
+    },
+    "ci_log_paths": {
+      "$ref": "#/$defs/stringList"
+    },
+    "scanner_log_paths": {
+      "$ref": "#/$defs/stringList"
+    },
+    "ignore_paths": {
+      "$ref": "#/$defs/stringList"
+    },
+    "focus_paths": {
+      "$ref": "#/$defs/stringList"
+    },
+    "rules_files": {
+      "$ref": "#/$defs/stringList"
+    },
+    "rules": {
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "stringList": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

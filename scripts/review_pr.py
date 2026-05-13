@@ -75,6 +75,27 @@ class Config:
     check_run_enabled: bool = True
     patch_artifact_path: str = "epic-code-reviewer-suggested.patch"
     task_memory_path: str = ".github/epic-code-reviewer-task-memory.md"
+    audit_log_path: str = ".github/epic-code-reviewer-command-audit.jsonl"
+    fallback_provider: str = ""
+    fallback_model: str = ""
+    risk_tier_passes: dict[str, list[str]] = field(
+        default_factory=lambda: {
+            "low": ["bug-regression"],
+            "medium": ["bug-regression", "tests", "api-compatibility"],
+            "high": [
+                "bug-regression",
+                "security",
+                "tests",
+                "api-compatibility",
+                "deploy-config",
+                "llm-agent",
+                "tool-permissions",
+                "stale-claims",
+            ],
+        }
+    )
+    skip_judge_on_low_risk: bool = True
+    auto_review_enabled: bool = True
 
 
 def env(name: str, default: str = "") -> str:
@@ -138,12 +159,12 @@ def provider_request(url: str, headers: dict[str, str], body: dict[str, Any]) ->
             if exc.code in {429, 500, 502, 503, 504} and attempt < 3:
                 time.sleep(2**attempt)
                 continue
-            die(f"model provider failed: HTTP {exc.code}: {text}")
+            raise RuntimeError(f"model provider failed: HTTP {exc.code}: {text}")
         except urllib.error.URLError as exc:
             if attempt < 3:
                 time.sleep(2**attempt)
                 continue
-            die(f"model provider failed: {exc}")
+            raise RuntimeError(f"model provider failed: {exc}")
 
     raise AssertionError("unreachable")
 
@@ -173,6 +194,9 @@ def load_config() -> Config:
 
     if raw.get("rules"):
         rules_parts.append(str(raw["rules"]))
+    tier_passes = raw.get("risk_tier_passes")
+    if not isinstance(tier_passes, dict):
+        tier_passes = Config().risk_tier_passes
 
     return Config(
         provider=str(raw.get("provider") or env("REVIEWER_PROVIDER", "openai-compatible")),
@@ -226,6 +250,13 @@ def load_config() -> Config:
             or env("REVIEWER_PATCH_ARTIFACT_PATH", "epic-code-reviewer-suggested.patch")
         ),
         task_memory_path=str(raw.get("task_memory_path", ".github/epic-code-reviewer-task-memory.md")),
+        audit_log_path=str(raw.get("audit_log_path", ".github/epic-code-reviewer-command-audit.jsonl")),
+        fallback_provider=str(raw.get("fallback_provider") or env("REVIEWER_FALLBACK_PROVIDER", "")),
+        fallback_model=str(raw.get("fallback_model") or env("REVIEWER_FALLBACK_MODEL", "")),
+        risk_tier_passes={str(tier): list(passes) for tier, passes in tier_passes.items() if isinstance(passes, list)},
+        skip_judge_on_low_risk=str(raw.get("skip_judge_on_low_risk", "true")).lower() == "true",
+        auto_review_enabled=str(raw.get("auto_review_enabled", env("REVIEWER_AUTO_REVIEW_ENABLED", "true"))).lower()
+        == "true",
     )
 
 
@@ -633,6 +664,74 @@ def read_named_paths(root: Path, paths: list[str], label: str, limit: int) -> st
     return "\n".join(parts)
 
 
+def parse_sarif_results(payload: dict[str, Any], limit: int = 20) -> list[str]:
+    lines: list[str] = []
+    runs = payload.get("runs", [])
+    if not isinstance(runs, list):
+        return lines
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        for result in run.get("results", []):
+            if not isinstance(result, dict):
+                continue
+            location = ((result.get("locations") or [{}])[0] or {}).get("physicalLocation", {})
+            artifact = (location.get("artifactLocation") or {}).get("uri", "unknown")
+            region = location.get("region") or {}
+            line = region.get("startLine", "?")
+            message = result.get("message") or {}
+            text = message.get("text") or message.get("markdown") or "No message."
+            rule = result.get("ruleId") or result.get("rule", {}).get("id") or "scanner"
+            level = result.get("level") or "warning"
+            lines.append(f"- {artifact}:{line} [{level}] {rule}: {safe_plain_text(text, 240)}")
+            if len(lines) >= limit:
+                return lines
+    return lines
+
+
+def parse_semgrep_results(payload: dict[str, Any], limit: int = 20) -> list[str]:
+    lines: list[str] = []
+    results = payload.get("results", [])
+    if not isinstance(results, list):
+        return lines
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        extra = result.get("extra") or {}
+        start = result.get("start") or {}
+        path = result.get("path") or "unknown"
+        line = start.get("line", "?")
+        rule = result.get("check_id") or "semgrep"
+        message = extra.get("message") or "No message."
+        severity = extra.get("severity") or "WARNING"
+        lines.append(f"- {path}:{line} [{severity}] {rule}: {safe_plain_text(message, 240)}")
+        if len(lines) >= limit:
+            break
+    return lines
+
+
+def scanner_findings_context(root: Path, paths: list[str], limit: int) -> str:
+    lines: list[str] = []
+    for raw_path in paths:
+        path = root / raw_path
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        parsed = parse_sarif_results(payload) or parse_semgrep_results(payload)
+        if parsed:
+            lines.append(f"Scanner findings from {raw_path}")
+            lines.extend(parsed)
+        if len("\n".join(lines)) >= limit:
+            break
+    if not lines:
+        return ""
+    text = "\n".join(lines)
+    return text[:limit] + "\n[scanner findings truncated]\n" if len(text) > limit else text
+
+
 def build_context_pack(root: Path, files: list[dict[str, Any]], config: Config) -> str:
     parts: list[str] = []
     used = 0
@@ -656,11 +755,12 @@ def build_context_pack(root: Path, files: list[dict[str, Any]], config: Config) 
         used += len(section)
 
     log_text = read_named_paths(root, config.ci_log_paths, "CI log", per_section_limit)
-    scanner_text = read_named_paths(root, config.scanner_log_paths, "Scanner log", per_section_limit)
+    scanner_findings = scanner_findings_context(root, config.scanner_log_paths, per_section_limit)
+    scanner_text = "" if scanner_findings else read_named_paths(root, config.scanner_log_paths, "Scanner log", per_section_limit)
     symbol_text = symbol_context(root, files, per_section_limit) if config.include_symbol_context else ""
     related_text = related_file_context(root, files, per_section_limit) if config.include_related_files else ""
     owners_text = codeowners_context(root, files)
-    for section in (symbol_text, related_text, owners_text, log_text, scanner_text):
+    for section in (symbol_text, related_text, owners_text, scanner_findings, log_text, scanner_text):
         if not section:
             continue
         remaining = config.max_context_chars - used
@@ -883,19 +983,19 @@ def format_pr_description(description: dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
-def call_model(prompt: str, config: Config) -> dict[str, Any]:
-    provider = config.provider.lower()
+def call_model_provider(prompt: str, provider: str, model: str) -> dict[str, Any]:
+    provider = provider.lower()
     if provider in {"openai", "openai-compatible", "ollama"}:
         api_key = env("REVIEWER_OPENAI_API_KEY") or env("OPENAI_API_KEY")
         base_url = env("REVIEWER_OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
         if provider != "ollama" and not api_key:
-            die("set REVIEWER_OPENAI_API_KEY or OPENAI_API_KEY")
+            raise RuntimeError("set REVIEWER_OPENAI_API_KEY or OPENAI_API_KEY")
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         response = provider_request(
             f"{base_url}/chat/completions",
             headers,
             {
-                "model": config.model,
+                "model": model,
                 "temperature": 0.1,
                 "response_format": {"type": "json_object"},
                 "messages": [
@@ -913,7 +1013,7 @@ def call_model(prompt: str, config: Config) -> dict[str, Any]:
     if provider == "anthropic":
         api_key = env("REVIEWER_ANTHROPIC_API_KEY") or env("ANTHROPIC_API_KEY")
         if not api_key:
-            die("set REVIEWER_ANTHROPIC_API_KEY or ANTHROPIC_API_KEY")
+            raise RuntimeError("set REVIEWER_ANTHROPIC_API_KEY or ANTHROPIC_API_KEY")
         response = provider_request(
             "https://api.anthropic.com/v1/messages",
             {
@@ -921,7 +1021,7 @@ def call_model(prompt: str, config: Config) -> dict[str, Any]:
                 "anthropic-version": "2023-06-01",
             },
             {
-                "model": config.model,
+                "model": model,
                 "max_tokens": 4096,
                 "temperature": 0.1,
                 "system": "You are a strict pull request reviewer. Return valid JSON only.",
@@ -931,7 +1031,24 @@ def call_model(prompt: str, config: Config) -> dict[str, Any]:
         content = "".join(block.get("text", "") for block in response.get("content", []))
         return parse_json_response(content)
 
-    die(f"unsupported provider: {config.provider}")
+    raise RuntimeError(f"unsupported provider: {provider}")
+
+
+def call_model(prompt: str, config: Config) -> dict[str, Any]:
+    try:
+        return call_model_provider(prompt, config.provider, config.model)
+    except RuntimeError as primary_error:
+        if not config.fallback_provider:
+            die(str(primary_error))
+        fallback_model = config.fallback_model or config.model
+        try:
+            print(
+                f"epic-code-reviewer: primary model failed, trying {config.fallback_provider}/{fallback_model}",
+                file=sys.stderr,
+            )
+            return call_model_provider(prompt, config.fallback_provider, fallback_model)
+        except RuntimeError as fallback_error:
+            die(f"{primary_error}; fallback failed: {fallback_error}")
 
 
 def parse_json_response(content: str) -> dict[str, Any]:
@@ -945,10 +1062,13 @@ def parse_json_response(content: str) -> dict[str, Any]:
         start = text.find("{")
         end = text.rfind("}")
         if start == -1 or end == -1 or end <= start:
-            die("model did not return JSON")
-        parsed = json.loads(text[start : end + 1])
+            raise RuntimeError("model did not return JSON")
+        try:
+            parsed = json.loads(text[start : end + 1])
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("model did not return valid JSON") from exc
     if not isinstance(parsed, dict):
-        die("model JSON response must be an object")
+        raise RuntimeError("model JSON response must be an object")
     return parsed
 
 
@@ -1311,6 +1431,17 @@ def review_mode_config(config: Config, command: str) -> None:
         config.max_inline_comments = min(config.max_inline_comments, 4)
 
 
+def apply_review_cost_controls(config: Config, risk: dict[str, Any], command: str) -> None:
+    if command in {"security", "deep", "quick"}:
+        return
+    tier = str(risk.get("tier") or "low")
+    passes = config.risk_tier_passes.get(tier)
+    if passes:
+        config.specialist_passes = passes
+    if tier == "low" and config.skip_judge_on_low_risk:
+        config.judge_enabled = False
+
+
 def parse_review_command_args(body: str, prefixes: list[str] | None = None) -> str:
     prefixes = prefixes or ["@epic-reviewer"]
     text = body.strip()
@@ -1335,6 +1466,8 @@ def should_trust_comment_command(comment: dict[str, Any]) -> bool:
 def pr_from_event(event: dict[str, Any], repo: str, token: str, config: Config) -> tuple[dict[str, Any] | None, str]:
     pr = event.get("pull_request")
     if pr:
+        if not config.auto_review_enabled:
+            return None, ""
         return pr, "review"
 
     comment = event.get("comment") or {}
@@ -1349,6 +1482,24 @@ def pr_from_event(event: dict[str, Any], repo: str, token: str, config: Config) 
     pull_number = int(issue["number"])
     pr = github_request("GET", f"/repos/{repo}/pulls/{pull_number}", token)
     return pr, command
+
+
+def write_command_audit(root: Path, path: str, event: dict[str, Any], pr: dict[str, Any], command: str) -> None:
+    comment = event.get("comment") or {}
+    actor = comment.get("user", {}).get("login") or event.get("sender", {}).get("login") or ""
+    record = {
+        "actor": actor,
+        "author_association": comment.get("author_association", ""),
+        "command": command,
+        "pull_number": pr.get("number"),
+        "head_sha": (pr.get("head") or {}).get("sha"),
+        "event_name": env("GITHUB_EVENT_NAME", ""),
+        "run_id": env("GITHUB_RUN_ID", ""),
+    }
+    target = root / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, sort_keys=True) + "\n")
 
 
 def write_patch_artifact(root: Path, result: dict[str, Any], path: str = "epic-code-reviewer-suggested.patch") -> Path:
@@ -1466,12 +1617,15 @@ def main() -> None:
 
     review_mode_config(config, command)
     pull_number = int(pr["number"])
+    if event.get("comment"):
+        write_command_audit(Path.cwd(), config.audit_log_path, event, pr, command)
     files = fetch_pr_files(repo, pull_number, token, config)
     if not files:
         print("epic-code-reviewer: no reviewable files")
         return
 
     risk = assess_pr_risk(files)
+    apply_review_cost_controls(config, risk, command)
     review_rules = load_review_rules(Path.cwd(), files, config.review_rule_files, config.path_rule_dirs)
     if review_rules:
         config.rules = "\n\n".join(part for part in [config.rules, review_rules] if part)

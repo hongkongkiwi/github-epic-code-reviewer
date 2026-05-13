@@ -28,6 +28,7 @@ Copy these files into the target repository:
 
 - `templates/ai-pr-review-with-scanners.yml` to `.github/workflows/ai-pr-review.yml`
 - `templates/epic-code-reviewer.config.json` to `epic-code-reviewer.config.json`
+- `templates/epic-code-reviewer.schema.json` to `epic-code-reviewer.schema.json`
 - `templates/REVIEW.md` to `REVIEW.md`
 - `templates/epic-code-reviewer-memory.json` to `.github/epic-code-reviewer-memory.json`
 - `templates/epic-code-reviewer-task-memory.md` to `.github/epic-code-reviewer-task-memory.md` if you want a checked-in seed file
@@ -47,6 +48,8 @@ The default workflow skips pull requests from forks. That keeps repository secre
 For a lighter setup, use `templates/ai-pr-review.yml`. It skips the test and Semgrep steps.
 
 For token-controlled reviews, use `templates/ai-pr-review-on-demand.yml`. It runs only after a repository owner, member, or collaborator comments with `@epic-reviewer`.
+
+For production pinning after the first release, use `templates/ai-pr-review-pinned.yml`. It points at `hongkongkiwi/github-epic-code-reviewer@v1` instead of `@main`.
 
 This repository also has `.github/workflows/self-review.yml` for on-demand self-review. It checks the same trust rules and skips the model call if `REVIEWER_OPENAI_API_KEY` is not configured.
 
@@ -72,13 +75,20 @@ Use `templates/ai-pr-review-local.yml` on a self-hosted runner with an OpenAI-co
 - `path_rule_dirs`: directories with `*.instructions.md` path rules.
 - `fail_on_block`: fails the workflow when a blocking finding survives filtering.
 - `specialist_passes`: controls which narrow review passes run.
-- `ci_log_paths` and `scanner_log_paths`: files copied into model context.
+- `risk_tier_passes`: changes model passes by low, medium, or high PR risk.
+- `skip_judge_on_low_risk`: avoids the judge pass on small low-risk reviews.
+- `auto_review_enabled`: when false, only trusted comment commands run.
+- `fallback_provider` and `fallback_model`: retry a failed primary model request elsewhere.
+- `ci_log_paths` and `scanner_log_paths`: files copied into model context. SARIF and Semgrep JSON are summarized before raw logs.
 - `judge_enabled`: runs the reject-weak-findings pass.
 - `dry_run`: writes JSON and the job summary without posting comments.
 - `check_run_enabled`: writes a neutral GitHub check run.
 - `memory_path`: suppresses dismissed findings by fingerprint.
 - `task_memory_path`: where CI writes a compact markdown record of risk, safeguards, and findings.
+- `audit_log_path`: appends trusted comment-command records as JSON lines.
 - `include_related_files`: copies matching test/spec files into context.
+
+The config file declares `epic-code-reviewer.schema.json`, so editors with JSON Schema support can catch misspelled fields.
 
 ## Commands
 
@@ -143,6 +153,8 @@ Optional local hooks:
 lefthook install
 lefthook run pre-commit
 ```
+
+Release tags use `.github/workflows/release.yml`. Push `v1.2.3` and the workflow publishes a GitHub release, then moves the matching major tag such as `v1`.
 
 ## Notes
 

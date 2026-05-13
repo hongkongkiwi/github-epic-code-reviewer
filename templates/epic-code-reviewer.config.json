@@ -1,4 +1,9 @@
 {
+  "$schema": "./epic-code-reviewer.schema.json",
+  "provider": "openai-compatible",
+  "model": "gpt-4.1-mini",
+  "fallback_provider": "",
+  "fallback_model": "",
   "post_mode": "both",
   "min_confidence": 0.72,
   "max_inline_comments": 8,
@@ -16,7 +21,30 @@
   "include_related_files": true,
   "memory_path": ".github/epic-code-reviewer-memory.json",
   "task_memory_path": ".github/epic-code-reviewer-task-memory.md",
+  "audit_log_path": ".github/epic-code-reviewer-command-audit.jsonl",
   "patch_artifact_path": "epic-code-reviewer-suggested.patch",
+  "auto_review_enabled": true,
+  "skip_judge_on_low_risk": true,
+  "risk_tier_passes": {
+    "low": [
+      "bug-regression"
+    ],
+    "medium": [
+      "bug-regression",
+      "tests",
+      "api-compatibility"
+    ],
+    "high": [
+      "bug-regression",
+      "security",
+      "tests",
+      "api-compatibility",
+      "deploy-config",
+      "llm-agent",
+      "tool-permissions",
+      "stale-claims"
+    ]
+  },
   "review_rule_files": [
     "REVIEW.md"
   ],
@@ -40,6 +68,7 @@
   ],
   "scanner_log_paths": [
     "semgrep-results.json",
+    "codeql-results.sarif",
     "codeql-results.txt"
   ],
   "ignore_paths": [
