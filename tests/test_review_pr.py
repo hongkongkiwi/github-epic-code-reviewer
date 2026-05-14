@@ -610,6 +610,34 @@ class ReviewPrTests(unittest.TestCase):
         self.assertFalse(config.skip_judge_on_low_risk)
         self.assertFalse(config.auto_review_enabled)
 
+    def test_load_config_respects_explicit_zero_numbers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "reviewer.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "min_confidence": 0,
+                        "max_inline_comments": 0,
+                        "context_lines": 0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REVIEWER_CONFIG_PATH": str(config_path),
+                    "REVIEWER_MIN_CONFIDENCE": "0.9",
+                    "REVIEWER_CONTEXT_LINES": "120",
+                },
+                clear=True,
+            ), mock.patch.object(Path, "cwd", return_value=Path(tmp)):
+                config = review_pr.load_config()
+
+        self.assertEqual(config.min_confidence, 0)
+        self.assertEqual(config.max_inline_comments, 0)
+        self.assertEqual(config.context_lines, 0)
+
     def test_filter_memory_findings_drops_dismissed_fingerprint(self):
         findings = [{"path": "src/app.py", "line": 12, "title": "Missing guard"}]
         memory = {"dismissed": [{"fingerprint": "src/app.py:12:missing-guard"}]}
