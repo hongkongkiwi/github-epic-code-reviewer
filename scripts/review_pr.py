@@ -104,6 +104,16 @@ def env(name: str, default: str = "") -> str:
     return value if value is not None and value != "" else default
 
 
+def raw_or_env(raw: dict[str, Any], key: str, env_name: str, default: Any) -> Any:
+    return raw[key] if key in raw else env(env_name, str(default))
+
+
+def parse_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def die(message: str) -> None:
     print(f"epic-code-reviewer: {message}", file=sys.stderr)
     sys.exit(1)
@@ -230,13 +240,12 @@ def load_config() -> Config:
         max_files=int(raw.get("max_files") or env("REVIEWER_MAX_FILES", "60")),
         max_diff_chars=int(raw.get("max_diff_chars") or env("REVIEWER_MAX_DIFF_CHARS", "120000")),
         min_confidence=float(raw.get("min_confidence") or env("REVIEWER_MIN_CONFIDENCE", "0.72")),
-        fail_on_block=str(raw.get("fail_on_block") or env("REVIEWER_FAIL_ON_BLOCK", "false")).lower()
-        == "true",
+        fail_on_block=parse_bool(raw_or_env(raw, "fail_on_block", "REVIEWER_FAIL_ON_BLOCK", False)),
         rules="\n\n".join(rules_parts),
         ignore_paths=list(raw.get("ignore_paths", [])),
         focus_paths=list(raw.get("focus_paths", [])),
         max_inline_comments=int(raw.get("max_inline_comments", 8)),
-        dry_run=str(raw.get("dry_run") or env("REVIEWER_DRY_RUN", "false")).lower() == "true",
+        dry_run=parse_bool(raw_or_env(raw, "dry_run", "REVIEWER_DRY_RUN", False)),
         dry_run_path=str(raw.get("dry_run_path") or env("REVIEWER_DRY_RUN_PATH", "epic-code-reviewer-output.json")),
         context_lines=int(raw.get("context_lines") or env("REVIEWER_CONTEXT_LINES", "80")),
         max_context_chars=int(raw.get("max_context_chars") or env("REVIEWER_MAX_CONTEXT_CHARS", "60000")),
@@ -257,19 +266,15 @@ def load_config() -> Config:
                 ],
             )
         ),
-        judge_enabled=str(raw.get("judge_enabled", env("REVIEWER_JUDGE_ENABLED", "true"))).lower()
-        == "true",
-        dedupe_comments=str(raw.get("dedupe_comments", env("REVIEWER_DEDUPE_COMMENTS", "true"))).lower()
-        == "true",
+        judge_enabled=parse_bool(raw_or_env(raw, "judge_enabled", "REVIEWER_JUDGE_ENABLED", True)),
+        dedupe_comments=parse_bool(raw_or_env(raw, "dedupe_comments", "REVIEWER_DEDUPE_COMMENTS", True)),
         command_prefixes=list(raw.get("command_prefixes", ["@epic-reviewer"])),
         review_rule_files=list(raw.get("review_rule_files", ["REVIEW.md"])),
         path_rule_dirs=list(raw.get("path_rule_dirs", [".github/epic-code-reviewer-rules"])),
-        include_symbol_context=str(raw.get("include_symbol_context", env("REVIEWER_SYMBOL_CONTEXT", "true"))).lower()
-        == "true",
-        include_related_files=str(raw.get("include_related_files", "true")).lower() == "true",
+        include_symbol_context=parse_bool(raw_or_env(raw, "include_symbol_context", "REVIEWER_SYMBOL_CONTEXT", True)),
+        include_related_files=parse_bool(raw.get("include_related_files", True)),
         memory_path=str(raw.get("memory_path", ".github/epic-code-reviewer-memory.json")),
-        check_run_enabled=str(raw.get("check_run_enabled", env("REVIEWER_CHECK_RUN_ENABLED", "true"))).lower()
-        == "true",
+        check_run_enabled=parse_bool(raw_or_env(raw, "check_run_enabled", "REVIEWER_CHECK_RUN_ENABLED", True)),
         patch_artifact_path=str(
             raw.get("patch_artifact_path")
             or env("REVIEWER_PATCH_ARTIFACT_PATH", "epic-code-reviewer-suggested.patch")
@@ -279,9 +284,8 @@ def load_config() -> Config:
         fallback_provider=str(raw.get("fallback_provider") or env("REVIEWER_FALLBACK_PROVIDER", "")),
         fallback_model=str(raw.get("fallback_model") or env("REVIEWER_FALLBACK_MODEL", "")),
         risk_tier_passes={str(tier): list(passes) for tier, passes in tier_passes.items() if isinstance(passes, list)},
-        skip_judge_on_low_risk=str(raw.get("skip_judge_on_low_risk", "true")).lower() == "true",
-        auto_review_enabled=str(raw.get("auto_review_enabled", env("REVIEWER_AUTO_REVIEW_ENABLED", "true"))).lower()
-        == "true",
+        skip_judge_on_low_risk=parse_bool(raw.get("skip_judge_on_low_risk", True)),
+        auto_review_enabled=parse_bool(raw_or_env(raw, "auto_review_enabled", "REVIEWER_AUTO_REVIEW_ENABLED", True)),
     )
 
 

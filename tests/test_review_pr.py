@@ -565,6 +565,51 @@ class ReviewPrTests(unittest.TestCase):
         self.assertEqual(config.provider, "openrouter")
         self.assertEqual(config.model, "anthropic/claude-sonnet-4.5")
 
+    def test_load_config_respects_explicit_false_booleans(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "reviewer.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "fail_on_block": False,
+                        "dry_run": False,
+                        "judge_enabled": False,
+                        "dedupe_comments": False,
+                        "include_symbol_context": False,
+                        "include_related_files": False,
+                        "check_run_enabled": False,
+                        "skip_judge_on_low_risk": False,
+                        "auto_review_enabled": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REVIEWER_CONFIG_PATH": str(config_path),
+                    "REVIEWER_FAIL_ON_BLOCK": "true",
+                    "REVIEWER_DRY_RUN": "true",
+                    "REVIEWER_JUDGE_ENABLED": "true",
+                    "REVIEWER_DEDUPE_COMMENTS": "true",
+                    "REVIEWER_SYMBOL_CONTEXT": "true",
+                    "REVIEWER_CHECK_RUN_ENABLED": "true",
+                    "REVIEWER_AUTO_REVIEW_ENABLED": "true",
+                },
+                clear=True,
+            ), mock.patch.object(Path, "cwd", return_value=Path(tmp)):
+                config = review_pr.load_config()
+
+        self.assertFalse(config.fail_on_block)
+        self.assertFalse(config.dry_run)
+        self.assertFalse(config.judge_enabled)
+        self.assertFalse(config.dedupe_comments)
+        self.assertFalse(config.include_symbol_context)
+        self.assertFalse(config.include_related_files)
+        self.assertFalse(config.check_run_enabled)
+        self.assertFalse(config.skip_judge_on_low_risk)
+        self.assertFalse(config.auto_review_enabled)
+
     def test_filter_memory_findings_drops_dismissed_fingerprint(self):
         findings = [{"path": "src/app.py", "line": 12, "title": "Missing guard"}]
         memory = {"dismissed": [{"fingerprint": "src/app.py:12:missing-guard"}]}
