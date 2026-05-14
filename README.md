@@ -1,136 +1,150 @@
 # GitHub Epic Code Reviewer
 
-A small, self-hostable AI pull request reviewer for GitHub Actions.
+AI pull request review that runs inside your own GitHub Actions account.
 
-It posts a sticky PR summary and inline comments on changed lines. The reviewer is strict by design: it asks the model for evidence-backed defects, filters out comments that do not point to changed lines, and caps the number of inline findings.
+It posts a sticky PR summary, optional inline review comments, a neutral check run, and artifacts for patches, task memory, and command audit logs. You bring the model: OpenAI, OpenRouter, Anthropic, an OpenAI-compatible gateway, or a local Ollama endpoint.
 
-The action now runs as a review pipeline:
+Use it when you want CodeRabbit-style PR feedback without tying every repo to one hosted reviewer.
 
-- It reads repo rules from `AGENTS.md` and `.github/epic-code-reviewer.md`.
-- It reads review-only policy from `REVIEW.md`, including nested files under changed paths.
-- It reads path-specific rules from `.github/epic-code-reviewer-rules/*.instructions.md`.
-- It collects nearby source lines around changed hunks.
-- It adds simple symbol matches, CODEOWNERS, CI logs, and scanner logs to the review context.
-- It adds related test/spec files when their names match changed files.
-- It can read CI and scanner logs before asking the model to review.
-- It runs narrow review passes for bugs, security, tests, API compatibility, and deploy/config risk.
-- It has extra lanes for LLM/agent code, tool permission boundaries, and stale review claims.
-- It runs a judge pass that drops weak findings.
-- It avoids reposting the same inline finding on later pushes.
-- It writes a neutral check run with machine-readable severity counts.
-- It scores PR risk from path and size signals, then uses that risk in the review prompt.
-- It writes compact markdown task memory for artifacts/debugging.
-- It splits stable reviewer rules from per-PR context with a cache boundary marker for providers that support prompt caching.
+## What It Posts
 
-## Use It In Another Repo
+- A PR summary that stays in one sticky comment.
+- Inline comments only on changed lines.
+- A neutral check run with counts by severity.
+- A suggested patch artifact when a trusted user asks for `@epic-reviewer fix`.
+- A compact task-memory artifact with risk notes, safeguards, and findings.
+- A JSONL command audit for trusted comment commands.
 
-Copy these files into the target repository:
+The bot is intentionally picky. Weak findings get filtered before GitHub sees them.
 
-- `templates/ai-pr-review-with-scanners.yml` to `.github/workflows/ai-pr-review.yml`
-- `templates/epic-code-reviewer.config.json` to `epic-code-reviewer.config.json`
-- `templates/epic-code-reviewer.schema.json` to `epic-code-reviewer.schema.json`
-- `templates/REVIEW.md` to `REVIEW.md`
-- `templates/epic-code-reviewer-memory.json` to `.github/epic-code-reviewer-memory.json`
-- `templates/epic-code-reviewer-task-memory.md` to `.github/epic-code-reviewer-task-memory.md` if you want a checked-in seed file
-- `templates/epic-code-reviewer-rules/*.instructions.md` to `.github/epic-code-reviewer-rules/`
-- optional `.github/epic-code-reviewer.md` for repo-specific review rules
+## How The Review Works
 
-For OpenAI, add one repository secret:
+For each allowed PR run, the action builds context, asks the model for defects, then checks the model's answer before posting.
 
-- `REVIEWER_OPENAI_API_KEY`
+- Reads repo rules from `AGENTS.md` and `.github/epic-code-reviewer.md`.
+- Reads review policy from `REVIEW.md`, including nested policy files under changed paths.
+- Reads path rules from `.github/epic-code-reviewer-rules/*.instructions.md`.
+- Adds nearby source lines around each changed hunk.
+- Adds CODEOWNERS, simple symbol matches, matching tests/specs, CI logs, and scanner output when present.
+- Scores PR risk from path and size signals.
+- Runs focused passes for bugs, security, tests, API compatibility, deploy/config changes, LLM/agent code, tool permissions, and stale claims.
+- Runs a judge pass that can reject weak findings.
+- Drops findings that do not land on changed lines.
+- Dedupes comments already posted by the action.
 
-Use this action input:
+That last part matters. Review bots lose trust fast when they comment on untouched code, repeat themselves, or nitpick Markdown.
+
+## Quick Start
+
+Use the pinned template for normal repos.
+
+1. Copy `templates/ai-pr-review-pinned.yml` to `.github/workflows/ai-pr-review.yml`.
+2. Copy `templates/epic-code-reviewer.config.json` to `epic-code-reviewer.config.json`.
+3. Copy `templates/epic-code-reviewer.schema.json` to `epic-code-reviewer.schema.json`.
+4. Copy `templates/REVIEW.md` to `REVIEW.md`.
+5. Add one provider secret, such as `REVIEWER_OPENAI_API_KEY`.
+6. Open a pull request.
+
+The pinned workflow uses:
 
 ```yaml
+uses: hongkongkiwi/github-epic-code-reviewer@v1
+```
+
+Start with `@v1` so patch releases arrive without editing each repo. Pin to a full tag if your release policy requires exact action versions.
+
+## Workflow Templates
+
+| Template | Use it for |
+| --- | --- |
+| `templates/ai-pr-review-pinned.yml` | Standard install using `@v1`. |
+| `templates/ai-pr-review-with-scanners.yml` | Review plus tests and Semgrep logs. |
+| `templates/ai-pr-review.yml` | Smaller install without scanner steps. |
+| `templates/ai-pr-review-on-demand.yml` | Only runs after a trusted `@epic-reviewer` comment. |
+| `templates/ai-pr-review-openrouter.yml` | OpenRouter-first setup. |
+| `templates/ai-pr-review-anthropic.yml` | Direct Anthropic setup. |
+| `templates/ai-pr-review-local.yml` | Self-hosted runner with a local OpenAI-compatible endpoint. |
+
+This repo also includes `.github/workflows/self-review.yml` for dogfooding. It skips the model call when the chosen provider secret is missing.
+
+## Provider Setup
+
+OpenAI:
+
+```yaml
+env:
+  REVIEWER_OPENAI_API_KEY: ${{ secrets.REVIEWER_OPENAI_API_KEY }}
 with:
   provider: openai
   model: gpt-4.1-mini
 ```
 
-For OpenAI-compatible gateways, also add:
-
-- `REVIEWER_OPENAI_BASE_URL`
-
-Use `provider: openai-compatible`. For Ollama or another local endpoint, use `templates/ai-pr-review-local.yml`.
-
-For OpenRouter, add:
-
-- `REVIEWER_OPENROUTER_API_KEY`
-
-Use this action input:
+OpenRouter:
 
 ```yaml
+env:
+  REVIEWER_OPENROUTER_API_KEY: ${{ secrets.REVIEWER_OPENROUTER_API_KEY }}
+  REVIEWER_OPENROUTER_SITE_URL: ${{ vars.REVIEWER_OPENROUTER_SITE_URL }}
+  REVIEWER_OPENROUTER_APP_NAME: GitHub Epic Code Reviewer
 with:
   provider: openrouter
   model: anthropic/claude-sonnet-4.5
 ```
 
-Optional OpenRouter metadata:
+Anthropic direct:
 
-- `REVIEWER_OPENROUTER_SITE_URL`
-- `REVIEWER_OPENROUTER_APP_NAME`
-- `REVIEWER_OPENROUTER_BASE_URL`
+```yaml
+env:
+  REVIEWER_ANTHROPIC_API_KEY: ${{ secrets.REVIEWER_ANTHROPIC_API_KEY }}
+with:
+  provider: anthropic
+  model: claude-sonnet-4-5-20250929
+```
 
-The default workflow skips pull requests from forks. That keeps repository secrets away from outside code. If you need fork support, run this on a locked-down self-hosted runner and review the permissions first.
+OpenAI-compatible gateway:
 
-For a lighter setup, use `templates/ai-pr-review.yml`. It skips the test and Semgrep steps.
+```yaml
+env:
+  REVIEWER_OPENAI_API_KEY: ${{ secrets.REVIEWER_OPENAI_API_KEY }}
+  REVIEWER_OPENAI_BASE_URL: ${{ secrets.REVIEWER_OPENAI_BASE_URL }}
+with:
+  provider: openai-compatible
+  model: your-model-name
+```
 
-For token-controlled reviews, use `templates/ai-pr-review-on-demand.yml`. It runs only after a repository owner, member, or collaborator comments with `@epic-reviewer`.
+Ollama on a self-hosted runner:
 
-For production pinning after the first release, use `templates/ai-pr-review-pinned.yml`. It points at `hongkongkiwi/github-epic-code-reviewer@v1` instead of `@main`.
+```yaml
+env:
+  REVIEWER_OPENAI_BASE_URL: http://127.0.0.1:11434/v1
+with:
+  provider: ollama
+  model: qwen2.5-coder:32b
+```
 
-This repository also has `.github/workflows/self-review.yml` for on-demand self-review. It checks the same trust rules and skips the model call when the selected provider has no matching secret. Set repo variables `REVIEWER_PROVIDER` and `REVIEWER_MODEL` to dogfood OpenRouter or Anthropic.
+You can also set `fallback-provider` and `fallback-model` so one failed model request retries elsewhere.
 
-If you want OpenRouter as the default, start with `templates/ai-pr-review-openrouter.yml`.
+## Trust Model
 
-## Anthropic
+The default templates are conservative because model calls need secrets.
 
-Use `templates/ai-pr-review-anthropic.yml` and add:
+- PR runs are skipped for forks.
+- Draft PRs are skipped.
+- `issue_comment` commands run only for `OWNER`, `MEMBER`, or `COLLABORATOR`.
+- The workflow checks out `refs/pull/<number>/merge` after preflight passes.
+- Write permissions are limited to PR review comments, issue comments, and check runs.
+- Config, memory, audit, and patch paths must stay inside the workspace.
+- The Python reviewer has no third-party package dependency.
 
-- `REVIEWER_ANTHROPIC_API_KEY`
-
-Use `provider: anthropic` for Anthropic's Messages API, or `provider: openrouter` for Anthropic models routed through OpenRouter.
-
-## Local Models
-
-Use `templates/ai-pr-review-local.yml` on a self-hosted runner with an OpenAI-compatible endpoint, such as Ollama on `http://127.0.0.1:11434/v1`.
-
-## Config
-
-`epic-code-reviewer.config.json` controls noise:
-
-- `min_confidence`: drops weak findings.
-- `max_inline_comments`: keeps the review short.
-- `ignore_paths`: skips generated files and lockfiles.
-- `rules_files`: reads local instructions such as `AGENTS.md`.
-- `review_rule_files`: review-only policy files, usually `REVIEW.md`.
-- `path_rule_dirs`: directories with `*.instructions.md` path rules.
-- `fail_on_block`: fails the workflow when a blocking finding survives filtering.
-- `specialist_passes`: controls which narrow review passes run.
-- `risk_tier_passes`: changes model passes by low, medium, or high PR risk.
-- `skip_judge_on_low_risk`: avoids the judge pass on small low-risk reviews.
-- `auto_review_enabled`: when false, only trusted comment commands run.
-- `fallback_provider` and `fallback_model`: retry a failed primary model request elsewhere.
-- `ci_log_paths` and `scanner_log_paths`: files copied into model context. SARIF and Semgrep JSON are summarized before raw logs.
-- `judge_enabled`: runs the reject-weak-findings pass.
-- `dry_run`: writes JSON and the job summary without posting comments.
-- `check_run_enabled`: writes a neutral GitHub check run.
-- `memory_path`: suppresses dismissed findings by fingerprint.
-- `task_memory_path`: where CI writes a compact markdown record of risk, safeguards, and findings.
-- `audit_log_path`: appends trusted comment-command records as JSON lines.
-- `include_related_files`: copies matching test/spec files into context.
-
-The config file declares `epic-code-reviewer.schema.json`, so editors with JSON Schema support can catch misspelled fields.
+If you need fork support, use a locked-down self-hosted runner and review the workflow permissions first. Don't hand repository secrets to untrusted PR code.
 
 ## Commands
 
-On a pull request, comment:
+Comment on a pull request:
 
 ```text
 @epic-reviewer retry
 ```
-
-That reruns the review.
 
 Other commands:
 
@@ -143,9 +157,39 @@ Other commands:
 @epic-reviewer security
 ```
 
-`ask` posts an answer as a PR comment. `describe` updates the PR title/body. `fix` writes a suggested patch artifact; it does not push commits.
+`ask` posts an answer as a PR comment. `describe` updates the PR title and body. `fix` writes a patch artifact but does not push commits.
 
 `quick`, `deep`, and `security` change the review profile for that run.
+
+## Config
+
+`epic-code-reviewer.config.json` controls review noise and context. It declares `epic-code-reviewer.schema.json`, so editors with JSON Schema support can catch misspelled fields.
+
+Common settings:
+
+| Setting | Meaning |
+| --- | --- |
+| `min_confidence` | Drops weak inline findings. |
+| `max_inline_comments` | Caps PR noise. |
+| `ignore_paths` | Skips generated files, lockfiles, vendored code, or repo-specific paths. |
+| `rules_files` | Repo instructions such as `AGENTS.md`. |
+| `review_rule_files` | Review-only policy files, usually `REVIEW.md`. |
+| `path_rule_dirs` | Directories with `*.instructions.md` files. |
+| `fail_on_block` | Fails the workflow when a blocking finding survives filtering. |
+| `specialist_passes` | Chooses focused model passes. |
+| `risk_tier_passes` | Changes passes by low, medium, or high PR risk. |
+| `skip_judge_on_low_risk` | Saves tokens on small low-risk PRs. |
+| `auto_review_enabled` | Disables automatic PR review while keeping trusted commands. |
+| `fallback_provider` | Retries a failed model request with another provider. |
+| `ci_log_paths` | Adds CI logs to model context. |
+| `scanner_log_paths` | Adds scanner output; SARIF and Semgrep JSON are summarized. |
+| `judge_enabled` | Runs the reject-weak-findings pass. |
+| `dry_run` | Writes JSON and the job summary without posting comments. |
+| `check_run_enabled` | Writes the neutral check run. |
+| `memory_path` | Suppresses dismissed findings by fingerprint. |
+| `task_memory_path` | Writes the compact markdown task record. |
+| `audit_log_path` | Appends trusted command records as JSON lines. |
+| `include_related_files` | Adds matching test/spec files to context. |
 
 ## Model Output Contract
 
@@ -153,7 +197,7 @@ The model must return JSON:
 
 ```json
 {
-  "summary": "short PR review summary",
+  "summary": "Short PR review summary.",
   "risk_level": "low",
   "findings": [
     {
@@ -168,11 +212,11 @@ The model must return JSON:
 }
 ```
 
-Findings that do not land on changed lines are discarded before posting.
+Valid severities are `info`, `warn`, and `block`. Findings outside changed lines are discarded.
 
 ## Local Development
 
-The script has no third-party Python dependencies.
+The reviewer is a composite GitHub Action around one Python script.
 
 ```bash
 python3 -m py_compile scripts/review_pr.py
@@ -186,8 +230,16 @@ lefthook install
 lefthook run pre-commit
 ```
 
-Release tags use `.github/workflows/release.yml`. Push `v1.2.3` and the workflow publishes a GitHub release, then moves the matching major tag such as `v1`.
+Workflow lint:
 
-## Notes
+```bash
+actionlint .github/workflows/*.yml templates/ai-pr-review*.yml
+```
 
-This action sends PR diffs to the configured model provider. For private code that must stay on your own network, run it on a self-hosted runner with an OpenAI-compatible local endpoint and set `REVIEWER_OPENAI_BASE_URL`.
+## Release
+
+Push a semver tag such as `v1.2.3`. `.github/workflows/release.yml` publishes a GitHub release, then moves the matching major tag such as `v1`.
+
+## Data Sent To Models
+
+The action sends selected PR diff, nearby source context, repo review rules, and configured logs to the chosen model provider. For private code that must stay on your own network, use `templates/ai-pr-review-local.yml` on a self-hosted runner with a local endpoint.
