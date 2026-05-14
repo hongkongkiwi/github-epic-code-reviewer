@@ -193,7 +193,9 @@ def load_event() -> dict[str, Any]:
 
 
 def load_config() -> Config:
-    path = Path(env("REVIEWER_CONFIG_PATH", "epic-code-reviewer.config.json"))
+    path = safe_workspace_path(Path.cwd(), env("REVIEWER_CONFIG_PATH", "epic-code-reviewer.config.json"))
+    if path is None:
+        die("REVIEWER_CONFIG_PATH must stay inside the workspace")
     raw: dict[str, Any] = {}
     if path.exists():
         with path.open("r", encoding="utf-8") as handle:
@@ -298,9 +300,17 @@ def read_text(path: Path) -> str:
 
 def safe_workspace_path(root: Path, raw_path: str) -> Path | None:
     path = Path(str(raw_path))
-    if path.is_absolute() or ".." in path.parts:
+    root_resolved = root.resolve()
+    candidate = path.resolve() if path.is_absolute() else (root / path).resolve()
+    try:
+        candidate.relative_to(root_resolved)
+    except ValueError:
         return None
-    return root / path
+    return candidate
+
+
+def workspace_relative(root: Path, path: Path) -> str:
+    return path.resolve().relative_to(root.resolve()).as_posix()
 
 
 def parse_instruction_file(text: str) -> tuple[list[str], str]:
@@ -327,11 +337,14 @@ def parse_instruction_file(text: str) -> tuple[list[str], str]:
 
 
 def parent_review_files(root: Path, changed_path: str, review_names: list[str]) -> list[Path]:
-    path = root / changed_path
+    path = safe_workspace_path(root, changed_path)
+    if path is None:
+        return []
+    root_resolved = root.resolve()
     directories = [path.parent, *path.parent.parents]
     files: list[Path] = []
     for directory in reversed(directories):
-        if root not in [directory, *directory.parents] and directory != root:
+        if root_resolved not in [directory, *directory.parents] and directory != root_resolved:
             continue
         for name in review_names:
             candidate = directory / name
@@ -358,7 +371,7 @@ def load_review_rules(
             seen.add(rule_file)
             text = read_text(rule_file).strip()
             if text:
-                parts.append(f"Review policy from {rule_file.relative_to(root)}:\n{text}")
+                parts.append(f"Review policy from {workspace_relative(root, rule_file)}:\n{text}")
 
     for raw_dir in rule_dirs:
         directory = safe_workspace_path(root, raw_dir)
@@ -369,7 +382,7 @@ def load_review_rules(
         for rule_file in sorted(directory.rglob("*.instructions.md")):
             globs, body = parse_instruction_file(read_text(rule_file))
             if body and any(glob_match(changed_path, globs) for changed_path in changed_paths):
-                parts.append(f"Path rule from {rule_file.relative_to(root)}:\n{body}")
+                parts.append(f"Path rule from {workspace_relative(root, rule_file)}:\n{body}")
 
     return "\n\n".join(parts)
 
@@ -551,7 +564,9 @@ def symbol_context(root: Path, files: list[dict[str, Any]], limit: int) -> str:
     changed = {str(file_info.get("filename", "")) for file_info in files}
     candidates: list[Path] = []
     for file_info in files:
-        path = root / str(file_info.get("filename", ""))
+        path = safe_workspace_path(root, str(file_info.get("filename", "")))
+        if path is None:
+            continue
         if path.exists() and path.is_file():
             candidates.append(path)
 
@@ -567,7 +582,7 @@ def symbol_context(root: Path, files: list[dict[str, Any]], limit: int) -> str:
                 continue
             start = max(1, index - 2)
             end = min(len(lines), index + 2)
-            section_lines = [f"{path.relative_to(root).as_posix()}:{start}-{end}"]
+            section_lines = [f"{workspace_relative(root, path)}:{start}-{end}"]
             for number in range(start, end + 1):
                 section_lines.append(f"{number}: {lines[number - 1]}")
             section = "\n".join(section_lines)
@@ -603,7 +618,11 @@ def codeowners_context(root: Path, files: list[dict[str, Any]]) -> str:
 
 
 def related_file_context(root: Path, files: list[dict[str, Any]], limit: int) -> str:
-    changed = [Path(str(file_info.get("filename", ""))) for file_info in files]
+    changed = []
+    for file_info in files:
+        filename = str(file_info.get("filename", ""))
+        if safe_workspace_path(root, filename) is not None:
+            changed.append(Path(filename))
     candidates: list[Path] = []
     seen: set[Path] = set()
     test_dirs = [root / "tests", root / "test", root / "__tests__"]
@@ -636,7 +655,7 @@ def related_file_context(root: Path, files: list[dict[str, Any]], limit: int) ->
         text = read_text(candidate)
         if not text:
             continue
-        rel = candidate.relative_to(root).as_posix()
+        rel = workspace_relative(root, candidate)
         snippet = "\n".join(text.splitlines()[:120])
         section = f"{rel}\n{snippet}"
         if used + len(section) > limit:
@@ -779,7 +798,10 @@ def build_context_pack(root: Path, files: list[dict[str, Any]], config: Config) 
         if not filename:
             continue
         patch = file_info.get("patch") or ""
-        context = line_window(root / filename, hunk_target_lines(patch), config.context_lines)
+        path = safe_workspace_path(root, filename)
+        if path is None:
+            continue
+        context = line_window(path, hunk_target_lines(patch), config.context_lines)
         if not context:
             continue
         section = f"Nearby source context for {filename}\n{context}\n"

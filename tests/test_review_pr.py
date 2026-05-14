@@ -533,11 +533,16 @@ class ReviewPrTests(unittest.TestCase):
                     "REVIEWER_MODEL": "anthropic/claude-sonnet-4.5",
                 },
                 clear=True,
-            ):
+            ), mock.patch.object(Path, "cwd", return_value=Path(tmp)):
                 config = review_pr.load_config()
 
         self.assertEqual(config.provider, "openrouter")
         self.assertEqual(config.model, "anthropic/claude-sonnet-4.5")
+
+    def test_load_config_rejects_config_path_outside_workspace(self):
+        with mock.patch.dict(os.environ, {"REVIEWER_CONFIG_PATH": "../reviewer.json"}, clear=True):
+            with self.assertRaises(SystemExit):
+                review_pr.load_config()
 
     def test_non_default_provider_input_overrides_stale_config_provider(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -554,7 +559,7 @@ class ReviewPrTests(unittest.TestCase):
                     "REVIEWER_MODEL": "anthropic/claude-sonnet-4.5",
                 },
                 clear=True,
-            ):
+            ), mock.patch.object(Path, "cwd", return_value=Path(tmp)):
                 config = review_pr.load_config()
 
         self.assertEqual(config.provider, "openrouter")
@@ -591,7 +596,10 @@ class ReviewPrTests(unittest.TestCase):
 
             self.assertIsNone(review_pr.safe_workspace_path(root, "../outside.patch"))
             self.assertIsNone(review_pr.safe_workspace_path(root, "/tmp/outside.patch"))
-            self.assertEqual(review_pr.safe_workspace_path(root, "artifacts/patch.diff"), root / "artifacts/patch.diff")
+            self.assertEqual(
+                review_pr.safe_workspace_path(root, "artifacts/patch.diff"),
+                (root / "artifacts/patch.diff").resolve(),
+            )
             with self.assertRaises(RuntimeError):
                 write_patch_artifact(root, {"patch": "diff"}, "../outside.patch")
 
@@ -625,6 +633,22 @@ class ReviewPrTests(unittest.TestCase):
 
             self.assertIn("inside policy", rules)
             self.assertNotIn("outside policy", rules)
+
+    def test_changed_file_paths_stay_in_workspace_for_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            outside = root.parent / "outside.py"
+            outside.write_text("secret", encoding="utf-8")
+
+            context = build_context_pack(
+                root,
+                [{"filename": "../outside.py", "patch": "@@ -1,1 +1,1 @@\n-old\n+new"}],
+                Config(context_lines=5),
+            )
+            rules = load_review_rules(root, [{"filename": "../outside.py"}], ["REVIEW.md"], [])
+
+            self.assertNotIn("secret", context)
+            self.assertEqual(rules, "")
 
     def test_write_dry_run_output_writes_json_and_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
