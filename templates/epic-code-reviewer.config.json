@@ -1,9 +1,5 @@
 {
   "$schema": "./epic-code-reviewer.schema.json",
-  "provider": "openai",
-  "model": "gpt-4.1-mini",
-  "fallback_provider": "",
-  "fallback_model": "",
   "post_mode": "both",
   "min_confidence": 0.72,
   "max_inline_comments": 8,

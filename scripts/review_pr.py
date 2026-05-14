@@ -14,6 +14,7 @@ import sys
 import time
 import html
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -108,6 +109,13 @@ def die(message: str) -> None:
     sys.exit(1)
 
 
+def ensure_http_url(url: str, label: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise RuntimeError(f"{label} must be an http(s) URL")
+    return url
+
+
 def github_request(
     method: str,
     path: str,
@@ -117,6 +125,10 @@ def github_request(
 ) -> Any:
     api_url = env("GITHUB_API_URL", "https://api.github.com").rstrip("/")
     url = path if path.startswith("http") else f"{api_url}{path}"
+    try:
+        ensure_http_url(url, "GitHub API URL")
+    except RuntimeError as exc:
+        die(str(exc))
     data = None if body is None else json.dumps(body).encode("utf-8")
     request = urllib.request.Request(url, data=data, method=method)
     request.add_header("Authorization", f"Bearer {token}")
@@ -127,6 +139,7 @@ def github_request(
 
     for attempt in range(4):
         try:
+            # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
             with urllib.request.urlopen(request, timeout=45) as response:
                 text = response.read().decode("utf-8")
                 return json.loads(text) if text else None
@@ -144,6 +157,7 @@ def github_request(
 
 
 def provider_request(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+    ensure_http_url(url, "model provider URL")
     data = json.dumps(body).encode("utf-8")
     request = urllib.request.Request(url, data=data, method="POST")
     for key, value in headers.items():
@@ -152,6 +166,7 @@ def provider_request(url: str, headers: dict[str, str], body: dict[str, Any]) ->
 
     for attempt in range(4):
         try:
+            # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
             with urllib.request.urlopen(request, timeout=120) as response:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
@@ -186,7 +201,9 @@ def load_config() -> Config:
 
     rules_parts = [DEFAULT_RULES]
     for rules_path in raw.get("rules_files", ["AGENTS.md", ".github/epic-code-reviewer.md"]):
-        candidate = Path(rules_path)
+        candidate = safe_workspace_path(Path.cwd(), str(rules_path))
+        if candidate is None:
+            continue
         if candidate.exists() and candidate.is_file():
             text = candidate.read_text(encoding="utf-8", errors="replace").strip()
             if text:
@@ -197,10 +214,16 @@ def load_config() -> Config:
     tier_passes = raw.get("risk_tier_passes")
     if not isinstance(tier_passes, dict):
         tier_passes = Config().risk_tier_passes
+    provider = str(raw.get("provider") or env("REVIEWER_PROVIDER", "openai"))
+    model = str(raw.get("model") or env("REVIEWER_MODEL", "gpt-4.1-mini"))
+    env_provider = env("REVIEWER_PROVIDER")
+    if env_provider and env_provider != "openai":
+        provider = env_provider
+        model = env("REVIEWER_MODEL", model)
 
     return Config(
-        provider=str(raw.get("provider") or env("REVIEWER_PROVIDER", "openai")),
-        model=str(raw.get("model") or env("REVIEWER_MODEL", "gpt-4.1-mini")),
+        provider=provider,
+        model=model,
         post_mode=str(raw.get("post_mode") or env("REVIEWER_POST_MODE", "both")),
         max_files=int(raw.get("max_files") or env("REVIEWER_MAX_FILES", "60")),
         max_diff_chars=int(raw.get("max_diff_chars") or env("REVIEWER_MAX_DIFF_CHARS", "120000")),
@@ -273,6 +296,13 @@ def read_text(path: Path) -> str:
         return ""
 
 
+def safe_workspace_path(root: Path, raw_path: str) -> Path | None:
+    path = Path(str(raw_path))
+    if path.is_absolute() or ".." in path.parts:
+        return None
+    return root / path
+
+
 def parse_instruction_file(text: str) -> tuple[list[str], str]:
     stripped = text.lstrip()
     if not stripped.startswith("---"):
@@ -321,7 +351,8 @@ def load_review_rules(
     seen: set[Path] = set()
 
     for changed_path in changed_paths:
-        for rule_file in parent_review_files(root, changed_path, review_names):
+        safe_review_names = [name for name in review_names if safe_workspace_path(root, name) is not None]
+        for rule_file in parent_review_files(root, changed_path, safe_review_names):
             if rule_file in seen:
                 continue
             seen.add(rule_file)
@@ -330,7 +361,9 @@ def load_review_rules(
                 parts.append(f"Review policy from {rule_file.relative_to(root)}:\n{text}")
 
     for raw_dir in rule_dirs:
-        directory = root / raw_dir
+        directory = safe_workspace_path(root, raw_dir)
+        if directory is None:
+            continue
         if not directory.exists() or not directory.is_dir():
             continue
         for rule_file in sorted(directory.rglob("*.instructions.md")):
@@ -646,7 +679,9 @@ def read_named_paths(root: Path, paths: list[str], label: str, limit: int) -> st
     parts: list[str] = []
     used = 0
     for raw_path in paths:
-        path = root / raw_path
+        path = safe_workspace_path(root, raw_path)
+        if path is None:
+            continue
         if not path.exists() or not path.is_file():
             continue
         try:
@@ -713,7 +748,9 @@ def parse_semgrep_results(payload: dict[str, Any], limit: int = 20) -> list[str]
 def scanner_findings_context(root: Path, paths: list[str], limit: int) -> str:
     lines: list[str] = []
     for raw_path in paths:
-        path = root / raw_path
+        path = safe_workspace_path(root, raw_path)
+        if path is None:
+            continue
         if not path.exists() or not path.is_file():
             continue
         try:
@@ -1217,14 +1254,16 @@ def filter_findings(
     kept: list[dict[str, Any]] = []
     severity_rank = {"block": 0, "warn": 1, "note": 2}
     accepted_ids = set()
+    judge_returned_accept_list = False
     if judge and isinstance(judge.get("accepted_ids"), list):
+        judge_returned_accept_list = True
         accepted_ids = {str(item) for item in judge["accepted_ids"]}
     for finding in findings:
         if not isinstance(finding, dict):
             continue
         if not finding.get("id"):
             finding["id"] = finding_identity(finding)
-        if accepted_ids and str(finding["id"]) not in accepted_ids:
+        if judge_returned_accept_list and str(finding["id"]) not in accepted_ids:
             continue
         path = str(finding.get("path", ""))
         try:
@@ -1265,7 +1304,9 @@ def dedupe_findings(findings: list[dict[str, Any]], previous_comments: list[dict
 
 
 def load_memory(root: Path, memory_path: str) -> dict[str, Any]:
-    path = root / memory_path
+    path = safe_workspace_path(root, memory_path)
+    if path is None:
+        return {}
     if not path.exists():
         return {}
     try:
@@ -1547,7 +1588,9 @@ def write_command_audit(root: Path, path: str, event: dict[str, Any], pr: dict[s
         "event_name": env("GITHUB_EVENT_NAME", ""),
         "run_id": env("GITHUB_RUN_ID", ""),
     }
-    target = root / path
+    target = safe_workspace_path(root, path)
+    if target is None:
+        raise RuntimeError(f"refusing to write outside workspace: {path}")
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, sort_keys=True) + "\n")
@@ -1555,7 +1598,10 @@ def write_command_audit(root: Path, path: str, event: dict[str, Any], pr: dict[s
 
 def write_patch_artifact(root: Path, result: dict[str, Any], path: str = "epic-code-reviewer-suggested.patch") -> Path:
     patch = str(result.get("patch") or "")
-    output = root / path
+    output = safe_workspace_path(root, path)
+    if output is None:
+        raise RuntimeError(f"refusing to write outside workspace: {path}")
+    output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(patch, encoding="utf-8")
     return output
 
@@ -1632,7 +1678,9 @@ def build_task_memory_markdown(
 
 
 def write_task_memory(root: Path, path: str, markdown: str) -> None:
-    target = root / path
+    target = safe_workspace_path(root, path)
+    if target is None:
+        raise RuntimeError(f"refusing to write outside workspace: {path}")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(markdown + "\n", encoding="utf-8")
 
@@ -1728,7 +1776,10 @@ def main() -> None:
 
     if config.dry_run:
         summary_path = Path(env("GITHUB_STEP_SUMMARY")) if env("GITHUB_STEP_SUMMARY") else None
-        write_dry_run_output(Path(config.dry_run_path), summary_path, result, findings)
+        dry_run_path = safe_workspace_path(Path.cwd(), config.dry_run_path)
+        if dry_run_path is None:
+            die(f"refusing to write outside workspace: {config.dry_run_path}")
+        write_dry_run_output(dry_run_path, summary_path, result, findings)
         write_task_memory(Path.cwd(), config.task_memory_path, build_task_memory_markdown(pr, risk, result, findings))
         print(f"epic-code-reviewer: dry-run wrote {config.dry_run_path}")
         return

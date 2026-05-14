@@ -118,10 +118,42 @@ class ReviewPrTests(unittest.TestCase):
 
         self.assertEqual([finding["id"] for finding in findings], ["keep"])
 
+    def test_filter_findings_drops_all_when_judge_accepts_none(self):
+        config = Config(min_confidence=0.7)
+        result = {
+            "findings": [
+                {
+                    "id": "reject",
+                    "path": "src/app.py",
+                    "line": 12,
+                    "severity": "warn",
+                    "confidence": 0.9,
+                    "title": "Rejected",
+                    "body": "The judge rejected this.",
+                }
+            ]
+        }
+
+        findings = filter_findings(result, {"src/app.py": {12}}, config, {"accepted_ids": []})
+
+        self.assertEqual(findings, [])
+
     def test_parse_json_response_accepts_fenced_json(self):
         parsed = parse_json_response('```json\n{"summary":"ok","findings":[]}\n```')
 
         self.assertEqual(parsed["summary"], "ok")
+
+    def test_provider_request_rejects_non_http_urls(self):
+        with self.assertRaises(RuntimeError):
+            review_pr.provider_request("file:///etc/passwd", {}, {"model": "x"})
+
+    def test_provider_request_allows_local_http_urls(self):
+        with mock.patch("urllib.request.urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value.read.return_value = b'{"ok":true}'
+
+            result = review_pr.provider_request("http://127.0.0.1:11434/v1/chat/completions", {}, {"model": "x"})
+
+        self.assertEqual(result, {"ok": True})
 
     def test_build_context_pack_reads_nearby_file_lines_and_logs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -478,6 +510,56 @@ class ReviewPrTests(unittest.TestCase):
 
         self.assertEqual(missing, set())
 
+    def test_template_config_does_not_override_workflow_provider(self):
+        for path in [
+            Path("epic-code-reviewer.config.json"),
+            Path("templates/epic-code-reviewer.config.json"),
+        ]:
+            config = json.loads(path.read_text(encoding="utf-8"))
+            self.assertNotIn("provider", config)
+            self.assertNotIn("model", config)
+            self.assertNotIn("fallback_provider", config)
+            self.assertNotIn("fallback_model", config)
+
+    def test_load_config_uses_provider_env_when_config_omits_provider(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "reviewer.json"
+            config_path.write_text('{"post_mode":"comment"}', encoding="utf-8")
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REVIEWER_CONFIG_PATH": str(config_path),
+                    "REVIEWER_PROVIDER": "openrouter",
+                    "REVIEWER_MODEL": "anthropic/claude-sonnet-4.5",
+                },
+                clear=True,
+            ):
+                config = review_pr.load_config()
+
+        self.assertEqual(config.provider, "openrouter")
+        self.assertEqual(config.model, "anthropic/claude-sonnet-4.5")
+
+    def test_non_default_provider_input_overrides_stale_config_provider(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "reviewer.json"
+            config_path.write_text(
+                '{"provider":"openai","model":"gpt-4.1-mini","post_mode":"comment"}',
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REVIEWER_CONFIG_PATH": str(config_path),
+                    "REVIEWER_PROVIDER": "openrouter",
+                    "REVIEWER_MODEL": "anthropic/claude-sonnet-4.5",
+                },
+                clear=True,
+            ):
+                config = review_pr.load_config()
+
+        self.assertEqual(config.provider, "openrouter")
+        self.assertEqual(config.model, "anthropic/claude-sonnet-4.5")
+
     def test_filter_memory_findings_drops_dismissed_fingerprint(self):
         findings = [{"path": "src/app.py", "line": 12, "title": "Missing guard"}]
         memory = {"dismissed": [{"fingerprint": "src/app.py:12:missing-guard"}]}
@@ -495,6 +577,54 @@ class ReviewPrTests(unittest.TestCase):
 
             self.assertTrue(path.exists())
             self.assertIn("+new", path.read_text(encoding="utf-8"))
+
+    def test_write_patch_artifact_creates_parent_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_patch_artifact(Path(tmp), {"patch": "diff"}, "artifacts/reviewer/patch.diff")
+
+            self.assertTrue(path.exists())
+            self.assertEqual(path.read_text(encoding="utf-8"), "diff")
+
+    def test_configured_output_paths_stay_in_workspace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            self.assertIsNone(review_pr.safe_workspace_path(root, "../outside.patch"))
+            self.assertIsNone(review_pr.safe_workspace_path(root, "/tmp/outside.patch"))
+            self.assertEqual(review_pr.safe_workspace_path(root, "artifacts/patch.diff"), root / "artifacts/patch.diff")
+            with self.assertRaises(RuntimeError):
+                write_patch_artifact(root, {"patch": "diff"}, "../outside.patch")
+
+    def test_configured_input_paths_skip_outside_workspace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            log = root / "logs" / "ci.log"
+            log.parent.mkdir()
+            log.write_text("inside", encoding="utf-8")
+
+            text = review_pr.read_named_paths(root, ["../secret", "logs/ci.log"], "CI log", 1000)
+
+            self.assertIn("inside", text)
+            self.assertNotIn("secret", text)
+
+    def test_review_rule_paths_stay_in_workspace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "src").mkdir()
+            (root / "src" / "app.py").write_text("print('hi')", encoding="utf-8")
+            (root / "REVIEW.md").write_text("inside policy", encoding="utf-8")
+            outside = root.parent / "outside-reviewer-rule.md"
+            outside.write_text("outside policy", encoding="utf-8")
+
+            rules = load_review_rules(
+                root,
+                [{"filename": "src/app.py"}],
+                ["REVIEW.md", f"../{outside.name}"],
+                ["../"],
+            )
+
+            self.assertIn("inside policy", rules)
+            self.assertNotIn("outside policy", rules)
 
     def test_write_dry_run_output_writes_json_and_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
